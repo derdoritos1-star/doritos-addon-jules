@@ -79,6 +79,7 @@ public class NetheriteFinder extends Module {
 
     private volatile BlockPos pendingAlertPos = null;
     private int ticksSinceAlert = 0;
+    private volatile java.util.List<BlockPos> blocksToRender = new java.util.ArrayList<>();
 
     public NetheriteFinder() {
         super(DoritosAddon.CATEGORY, "NetheriteFinder", "Zync-style Palette truster. Never disappears while moving.");
@@ -223,7 +224,7 @@ public class NetheriteFinder extends Module {
             int cz = sectionPos.getSectionZ();
 
             if (!mc.world.getChunkManager().isChunkLoaded(cx, cz)) {
-                suspectedQueue.offer(sectionPos);
+                retryCounts.remove(sectionPos);
                 continue;
             }
 
@@ -321,21 +322,24 @@ public class NetheriteFinder extends Module {
             }
             return isFar;
         });
+
+        // Cache render blocks to fix FPS drops
+        double maxDistSq = Math.pow(renderDistance.get() * 16.0, 2);
+        blocksToRender = foundBlocks.stream()
+                .filter(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ()) <= maxDistSq)
+                .sorted(Comparator.comparingDouble(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ())))
+                .collect(Collectors.toList());
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null || coordsOnly.get()) return;
 
-        double maxDistSq = Math.pow(renderDistance.get() * 16.0, 2);
-
-        List<BlockPos> sortedBlocks = foundBlocks.stream()
-                .filter(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ()) <= maxDistSq)
-                .sorted(Comparator.comparingDouble(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ())))
-                .collect(Collectors.toList());
+        java.util.List<BlockPos> currentBlocks = blocksToRender;
+        if (currentBlocks == null) return;
 
         int rendered = 0;
-        for (BlockPos pos : sortedBlocks) {
+        for (BlockPos pos : currentBlocks) {
             if (rendered >= maxBoxes.get()) break;
 
             if (blockEsp.get()) {
