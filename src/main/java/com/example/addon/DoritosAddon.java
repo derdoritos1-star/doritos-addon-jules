@@ -15,6 +15,8 @@ import meteordevelopment.meteorclient.systems.hud.Hud;
 import meteordevelopment.meteorclient.systems.hud.HudGroup;
 import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.gui.GuiThemes;
+
 
 import org.slf4j.Logger;
 
@@ -34,6 +36,8 @@ public class DoritosAddon extends MeteorAddon {
         Modules.get().add(new SusChunkFinder());
 
         Hud.get().register(HudExample.INFO);
+
+        GuiThemes.add(new DoritosTheme());
     }
 
     @Override
