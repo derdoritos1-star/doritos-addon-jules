@@ -1,6 +1,7 @@
 
 package com.example.addon;
 
+import com.example.addon.modules.ChunkProfiler;
 import com.example.addon.modules.SusChunkFinder;
 import com.example.addon.hud.HudExample;
 import com.example.addon.modules.ModuleExample;
@@ -34,6 +35,7 @@ public class DoritosAddon extends MeteorAddon {
         Modules.get().add(new NetheriteFinder());
         Modules.get().add(new DonutSpawnerFinder());
         Modules.get().add(new SusChunkFinder());
+        Modules.get().add(new ChunkProfiler());
 
         Hud.get().register(HudExample.INFO);
 
