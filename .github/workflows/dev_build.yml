@@ -30,11 +30,7 @@ jobs:
         run: echo "timestamp=$(date +'%Y-%m-%d-%H-%M')" >> $GITHUB_OUTPUT
 
       - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: dev-${{ steps.time.outputs.timestamp }}
-          name: Doritos Addon (${{ steps.time.outputs.timestamp }})
-          prerelease: true
-          files: |
-            ./build/libs/*.jar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create dev-${{ steps.time.outputs.timestamp }} build/libs/*.jar --title "Doritos Addon (${{ steps.time.outputs.timestamp }})" --prerelease
