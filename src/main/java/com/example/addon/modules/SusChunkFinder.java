@@ -15,12 +15,17 @@ import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+
+import net.minecraft.block.DoorBlock;
+import net.minecraft.block.TrapdoorBlock;
+
 import net.minecraft.block.Blocks;
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.passive.PassiveEntity;
+import net.minecraft.entity.passive.TameableEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.entity.vehicle.ChestMinecartEntity;
 import net.minecraft.entity.vehicle.HopperMinecartEntity;
@@ -131,6 +136,10 @@ public class SusChunkFinder extends Module {
                 if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity ||
                     entity instanceof HopperMinecartEntity) {
                     addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands/storage carts
+                } else if (entity.hasCustomName()) {
+                    addScore(cPos, anomalyThreshold.get()); // Named entities = guaranteed player
+                } else if (entity instanceof TameableEntity tameable && tameable.isTamed()) {
+                    addScore(cPos, anomalyThreshold.get()); // Pets = guaranteed base
                 } else if (entity instanceof PassiveEntity || entity instanceof VillagerEntity) {
                     passiveCounts.put(cPos, passiveCounts.getOrDefault(cPos, 0) + 1);
                 }
@@ -194,14 +203,24 @@ public class SusChunkFinder extends Module {
             if (worldYStart < surfaceTraceMaxY.get() && (mode == TriggerMode.All || mode == TriggerMode.StorageBase)) {
                 if (section.hasAny(state -> {
                     Block b = state.getBlock();
+
+                    // 1. Guaranteed Player Trace (Sub-Zero strict check for things that spawn in villages on the surface)
+                    if (worldYStart < 0) {
+                        if (b instanceof DoorBlock || b instanceof TrapdoorBlock || b instanceof net.minecraft.block.BedBlock ||
+                            b == Blocks.TORCH || b == Blocks.WALL_TORCH || b == Blocks.LANTERN || b == Blocks.CAMPFIRE ||
+                            b == Blocks.LADDER) {
+                            return true;
+                        }
+                    }
+
+                    // 2. Unobfuscatable Block Checks (Valid below surfaceTraceMaxY)
                     return b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
                            b == Blocks.END_ROD || b == Blocks.ANVIL ||
                            b == Blocks.BREWING_STAND || b == Blocks.CAULDRON ||
                            b == Blocks.BOOKSHELF || b == Blocks.JUKEBOX ||
                            b == Blocks.NOTE_BLOCK || b == Blocks.FURNACE ||
                            b == Blocks.SMOKER || b == Blocks.BLAST_FURNACE ||
-                           b == Blocks.ENCHANTING_TABLE ||
-                           b instanceof net.minecraft.block.BedBlock;
+                           b == Blocks.ENCHANTING_TABLE || b == Blocks.NETHER_PORTAL;
                 })) {
                     localScore += anomalyThreshold.get();
                 }
