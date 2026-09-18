@@ -217,10 +217,10 @@ public class SusChunkFinder extends Module {
                 net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
                 if (be != null) {
                     net.minecraft.block.entity.BlockEntityType<?> type = be.getType();
-                    if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST ||
-                        type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX ||
-                        type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
-                        localScore += 20;
+                    if (type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST) {
+                        localScore += anomalyThreshold.get(); // 100% Player Stash
+                    } else if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
+                        localScore += 10; // Nerf normal chests to avoid mineshaft flags
                     }
                 }
             }
@@ -255,23 +255,15 @@ public class SusChunkFinder extends Module {
                 if (section.hasAny(state -> {
                     Block b = state.getBlock();
 
-                    // 1. Guaranteed Player Trace (Sub-Zero strict check for things that spawn in villages on the surface)
-                    if (worldYStart < 0) {
-                        if (b instanceof DoorBlock || b instanceof TrapdoorBlock || b instanceof net.minecraft.block.BedBlock ||
-                            b == Blocks.TORCH || b == Blocks.WALL_TORCH || b == Blocks.LANTERN || b == Blocks.CAMPFIRE ||
-                            b == Blocks.LADDER) {
-                            return true;
-                        }
-                    }
-
-                    // 2. Unobfuscatable Block Checks (Valid below surfaceTraceMaxY)
                     return b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
-                           b == Blocks.END_ROD || b == Blocks.ANVIL ||
-                           b == Blocks.BREWING_STAND || b == Blocks.CAULDRON ||
-                           b == Blocks.BOOKSHELF || b == Blocks.JUKEBOX ||
-                           b == Blocks.NOTE_BLOCK || b == Blocks.FURNACE ||
-                           b == Blocks.SMOKER || b == Blocks.BLAST_FURNACE ||
-                           b == Blocks.ENCHANTING_TABLE || b == Blocks.NETHER_PORTAL;
+                           b == Blocks.FARMLAND || b == Blocks.END_ROD ||
+                           b == Blocks.ANVIL || b == Blocks.BREWING_STAND ||
+                           b == Blocks.CAULDRON || b == Blocks.BOOKSHELF ||
+                           b == Blocks.JUKEBOX || b == Blocks.NOTE_BLOCK ||
+                           b == Blocks.FURNACE || b == Blocks.SMOKER ||
+                           b == Blocks.BLAST_FURNACE || b == Blocks.ENCHANTING_TABLE ||
+                           b == Blocks.NETHER_PORTAL || b == Blocks.ENDER_CHEST ||
+                           b instanceof net.minecraft.block.BedBlock;
                 })) {
                     localScore += anomalyThreshold.get();
                 }
@@ -294,10 +286,10 @@ public class SusChunkFinder extends Module {
             if (pos.getY() < 0) {
                 ChunkPos cPos = new ChunkPos(pos);
                 BlockEntityType<?> type = packet.getBlockEntityType();
-                if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST ||
-                    type == BlockEntityType.BARREL || type == BlockEntityType.SHULKER_BOX ||
-                    type == BlockEntityType.HOPPER) {
-                    addScore(cPos, 20);
+                if (type == BlockEntityType.SHULKER_BOX || type == BlockEntityType.TRAPPED_CHEST) {
+                    addScore(cPos, anomalyThreshold.get());
+                } else if (type == BlockEntityType.CHEST || type == BlockEntityType.BARREL || type == BlockEntityType.HOPPER) {
+                    addScore(cPos, 10);
                 }
             }
         }
@@ -333,11 +325,6 @@ public class SusChunkFinder extends Module {
                     if (soundHeatmap.size() >= 500) soundHeatmap.remove(0);
                     soundHeatmap.add(entity.getBlockPos());
                 }
-            }
-        } else if (event.packet instanceof ParticleS2CPacket packet) {
-            if (packet.getY() < 0) {
-                ChunkPos pos = new ChunkPos((int) packet.getX() >> 4, (int) packet.getZ() >> 4);
-                addScore(pos, anomalyThreshold.get()); // Massive score
             }
         }
     }
