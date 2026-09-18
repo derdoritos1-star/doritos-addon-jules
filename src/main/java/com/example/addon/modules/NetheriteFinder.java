@@ -199,7 +199,7 @@ public class NetheriteFinder extends Module {
             if (currentTarget == null) {
                 blastTargets.put(playerSec, generateTarget(playerSec));
             } else {
-                if (mc.world.getBlockState(currentTarget).isAir()) {
+                if (!mc.world.getBlockState(currentTarget).isOf(Blocks.ANCIENT_DEBRIS)) {
                     blastTargets.put(playerSec, generateTarget(playerSec));
                 }
             }
@@ -237,15 +237,26 @@ public class NetheriteFinder extends Module {
         int cy = sec.getMinY();
         int cz = sec.getMinZ();
 
-        for (int i = 0; i < 50; i++) {
-            int rx = cx + 4 + (int)(Math.random() * 8);
-            int ry = cy + 4 + (int)(Math.random() * 8);
-            int rz = cz + 4 + (int)(Math.random() * 8);
-            BlockPos pos = new BlockPos(rx, ry, rz);
-            if (!mc.world.getBlockState(pos).isAir()) {
-                return pos;
+        java.util.List<BlockPos> suspectedDebris = new java.util.ArrayList<>();
+
+        // Scan the chunk section precisely for blocks the server reports as Ancient Debris
+        for (int bx = 0; bx < 16; bx++) {
+            for (int by = 0; by < 16; by++) {
+                for (int bz = 0; bz < 16; bz++) {
+                    BlockPos pos = new BlockPos(cx + bx, cy + by, cz + bz);
+                    if (mc.world.getBlockState(pos).isOf(Blocks.ANCIENT_DEBRIS)) {
+                        suspectedDebris.add(pos);
+                    }
+                }
             }
         }
+
+        if (!suspectedDebris.isEmpty()) {
+            // Pick a random suspected debris block to act as the crystal blast epicenter
+            return suspectedDebris.get((int) (Math.random() * suspectedDebris.size()));
+        }
+
+        // Fallback to center if section is completely empty of fakes
         return new BlockPos(cx + 8, cy + 8, cz + 8);
     }
 
