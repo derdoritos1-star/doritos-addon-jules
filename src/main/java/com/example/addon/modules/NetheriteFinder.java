@@ -75,6 +75,7 @@ public class NetheriteFinder extends Module {
 
     private final Queue<ChunkSectionPos> suspectedQueue = new ConcurrentLinkedQueue<>();
     private final Map<ChunkSectionPos, Integer> retryCounts = new ConcurrentHashMap<>();
+    private final Map<ChunkSectionPos, BlockPos> blastTargets = new ConcurrentHashMap<>();
 
 
     private volatile BlockPos pendingAlertPos = null;
@@ -121,6 +122,7 @@ public class NetheriteFinder extends Module {
         confirmedSections.clear();
         suspectedQueue.clear();
         retryCounts.clear();
+        blastTargets.clear();
         pendingAlertPos = null;
         ticksSinceAlert = alertCooldown.get();
     }
@@ -186,9 +188,20 @@ public class NetheriteFinder extends Module {
         ticksSinceAlert++;
 
         ChunkSectionPos playerSec = ChunkSectionPos.from(mc.player.getBlockPos());
+
         if (suspectedSet.contains(playerSec)) {
             enteredSections.add(playerSec);
+
+            BlockPos currentTarget = blastTargets.get(playerSec);
+            if (currentTarget == null) {
+                blastTargets.put(playerSec, generateTarget(playerSec));
+            } else {
+                if (mc.world.getBlockState(currentTarget).isAir()) {
+                    blastTargets.put(playerSec, generateTarget(playerSec));
+                }
+            }
         }
+
 
         // Авто-удаление: удаляем ТОЛЬКО если точечные блоки были точно найдены (confirmed),
         // и теперь их там нет (выкопаны вблизи). Во время полета удаляться ничего не будет!
@@ -200,6 +213,7 @@ public class NetheriteFinder extends Module {
             if (confirmedSections.contains(sec) && !hasBlocks) {
                 enteredSections.remove(sec);
                 confirmedSections.remove(sec);
+                blastTargets.remove(sec);
                 return true;
             }
             return false;
@@ -211,6 +225,25 @@ public class NetheriteFinder extends Module {
         if (mc.player.age % 40 == 0) {
             cleanOutOfRange();
         }
+    }
+
+
+
+    private BlockPos generateTarget(ChunkSectionPos sec) {
+        int cx = sec.getMinX();
+        int cy = sec.getMinY();
+        int cz = sec.getMinZ();
+
+        for (int i = 0; i < 50; i++) {
+            int rx = cx + (int)(Math.random() * 14) + 1;
+            int ry = cy + (int)(Math.random() * 14) + 1;
+            int rz = cz + (int)(Math.random() * 14) + 1;
+            BlockPos pos = new BlockPos(rx, ry, rz);
+            if (!mc.world.getBlockState(pos).isAir()) {
+                return pos;
+            }
+        }
+        return new BlockPos(cx + 8, cy + 8, cz + 8);
     }
 
     private void processPaletteQueue() {
@@ -319,6 +352,7 @@ public class NetheriteFinder extends Module {
                 enteredSections.remove(sec);
                 confirmedSections.remove(sec);
                 retryCounts.remove(sec);
+                blastTargets.remove(sec);
             }
             return isFar;
         });
@@ -362,15 +396,14 @@ public class NetheriteFinder extends Module {
 
                 event.renderer.box(sec.getMinX(), sec.getMinY(), sec.getMinZ(), sec.getMaxX() + 1, sec.getMaxY() + 1, sec.getMaxZ() + 1, sideColor.get(), currentLineColor, ShapeMode.Lines, 0);
 
+
                 if (hasEntered) {
-                    double minX = sec.getMinX() + 7;
-                    double maxX = sec.getMinX() + 9;
-                    double minY = sec.getMinY();
-                    double maxY = sec.getMinY() + 0.05;
-                    double minZ = sec.getMinZ() + 7;
-                    double maxZ = sec.getMinZ() + 9;
-                    event.renderer.box(minX, minY, minZ, maxX, maxY, maxZ, redSide, redLine, ShapeMode.Both, 0);
+                    BlockPos target = blastTargets.get(sec);
+                    if (target != null) {
+                        event.renderer.box(target, redSide, redLine, ShapeMode.Both, 0);
+                    }
                 }
+
             }
         }
 
