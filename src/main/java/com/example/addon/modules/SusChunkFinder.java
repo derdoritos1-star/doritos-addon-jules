@@ -41,6 +41,11 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.ChunkSection;
 
+import net.minecraft.network.packet.s2c.play.LightUpdateS2CPacket;
+import java.util.ArrayList;
+import java.util.List;
+
+
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,6 +77,11 @@ public class SusChunkFinder extends Module {
     private final Map<ChunkPos, Integer> chunkScores = new ConcurrentHashMap<>();
     private final Set<ChunkPos> alertedChunks = ConcurrentHashMap.newKeySet();
 
+    // Ultimate Tracking State
+    private final List<ChunkPos> alertHistory = new ArrayList<>();
+    private final List<BlockPos> soundHeatmap = new ArrayList<>();
+    private ChunkPos predictedVector = null;
+
     public SusChunkFinder() {
         super(DoritosAddon.CATEGORY, "SusChunkFinder", "Sub-Zero Target Detector. Exploits anti-xray flaws below Y=0.");
     }
@@ -80,12 +90,18 @@ public class SusChunkFinder extends Module {
     public void onActivate() {
         chunkScores.clear();
         alertedChunks.clear();
+        alertHistory.clear();
+        soundHeatmap.clear();
+        predictedVector = null;
     }
 
     @Override
     public void onDeactivate() {
         chunkScores.clear();
         alertedChunks.clear();
+        alertHistory.clear();
+        soundHeatmap.clear();
+        predictedVector = null;
     }
 
     private void addScore(ChunkPos pos, int score) {
@@ -94,9 +110,31 @@ public class SusChunkFinder extends Module {
         int newScore = chunkScores.merge(pos, score, Integer::sum);
         if (newScore >= anomalyThreshold.get() && alertedChunks.add(pos)) {
             sendNotification(pos, newScore);
+
+            // Track history for Vector Prediction
+            if (alertHistory.size() >= 5) alertHistory.remove(0);
+            alertHistory.add(pos);
+
+            // Calculate Tunnel Vector if we have at least 3 points
+            if (alertHistory.size() >= 3) {
+                ChunkPos p1 = alertHistory.get(alertHistory.size() - 3);
+                ChunkPos p2 = alertHistory.get(alertHistory.size() - 2);
+                ChunkPos p3 = alertHistory.get(alertHistory.size() - 1);
+
+                int dx1 = p2.x - p1.x;
+                int dz1 = p2.z - p1.z;
+                int dx2 = p3.x - p2.x;
+                int dz2 = p3.z - p2.z;
+
+                // If moving in a consistent straight line
+                if (Math.signum(dx1) == Math.signum(dx2) && Math.signum(dz1) == Math.signum(dz2)) {
+                    if (dx1 != 0 || dz1 != 0) {
+                        predictedVector = new ChunkPos(p3.x + (dx2 * 10), p3.z + (dz2 * 10)); // Project 10 chunks forward
+                    }
+                }
+            }
         }
     }
-
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
@@ -108,6 +146,7 @@ public class SusChunkFinder extends Module {
         // Clear ghost chunks after /rtp
         alertedChunks.removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
         chunkScores.keySet().removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
+        if (alertedChunks.isEmpty()) { alertHistory.clear(); soundHeatmap.clear(); predictedVector = null; }
 
         int radius = scanRadius.get();
 
@@ -269,28 +308,41 @@ public class SusChunkFinder extends Module {
                 if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST ||
                     type == BlockEntityType.BARREL || type == BlockEntityType.SHULKER_BOX ||
                     type == BlockEntityType.HOPPER) {
-                    addScore(cPos, 20);
+                    addScore(cPos, anomalyThreshold.get());
                 }
             }
+        }
+        else if (event.packet instanceof LightUpdateS2CPacket packet) {
+            // Unobfuscatable Light Update Sniffing
+            ChunkPos pos = new ChunkPos(packet.getChunkX(), packet.getChunkZ());
+            if (alertedChunks.contains(pos)) return;
+            // The anti-cheat calculates block light for torches/furnaces but hides the block.
+            // If the server sends a block-light packet updates, it means something changed locally.
+            // We flag it implicitly if it's underground.
+            addScore(pos, anomalyThreshold.get());
         }
         else if (event.packet instanceof PlaySoundS2CPacket packet) {
             if (packet.getY() < 0) {
                 ChunkPos pos = new ChunkPos((int) packet.getX() >> 4, (int) packet.getZ() >> 4);
-                addScore(pos, 200); // Massive score
+                addScore(pos, anomalyThreshold.get()); // Massive score
+                BlockPos exactPos = new BlockPos((int)packet.getX(), (int)packet.getY(), (int)packet.getZ());
+                if (soundHeatmap.size() < 500) soundHeatmap.add(exactPos);
             }
         } else if (event.packet instanceof PlaySoundFromEntityS2CPacket packet) {
             Entity entity = mc.world.getEntityById(packet.getEntityId());
             if (entity != null && entity.getY() < 0) {
                 ChunkPos pos = new ChunkPos((int) entity.getX() >> 4, (int) entity.getZ() >> 4);
-                addScore(pos, 200);
+                addScore(pos, anomalyThreshold.get());
+                if (soundHeatmap.size() < 500) soundHeatmap.add(entity.getBlockPos());
             }
         } else if (event.packet instanceof ParticleS2CPacket packet) {
             if (packet.getY() < 0) {
                 ChunkPos pos = new ChunkPos((int) packet.getX() >> 4, (int) packet.getZ() >> 4);
-                addScore(pos, 200); // Massive score
+                addScore(pos, anomalyThreshold.get()); // Massive score
             }
         }
     }
+
 
     private void sendNotification(ChunkPos cPos, int score) {
         String msg = String.format("⚠ SUB-ZERO TARGET DETECTED at %d, %d (Score: %d)", cPos.getStartX(), cPos.getStartZ(), score);
@@ -319,6 +371,25 @@ public class SusChunkFinder extends Module {
         SettingColor color = chunkGridColor.get();
         meteordevelopment.meteorclient.utils.render.color.Color outlineColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 255);
         meteordevelopment.meteorclient.utils.render.color.Color fillColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 60);
+        meteordevelopment.meteorclient.utils.render.color.Color vectorColor = new meteordevelopment.meteorclient.utils.render.color.Color(0, 255, 255, 255); // Cyan for vector
+        meteordevelopment.meteorclient.utils.render.color.Color heatColor = new meteordevelopment.meteorclient.utils.render.color.Color(255, 100, 0, 150); // Orange for sounds
+
+        // Render Heatmap
+        for (BlockPos heatPos : soundHeatmap) {
+            event.renderer.box(heatPos.getX() - 0.2, heatPos.getY() - 0.2, heatPos.getZ() - 0.2, heatPos.getX() + 1.2, heatPos.getY() + 1.2, heatPos.getZ() + 1.2, heatColor, heatColor, ShapeMode.Both, 0);
+        }
+
+        // Render Prediction Vector
+        if (predictedVector != null && !alertHistory.isEmpty()) {
+            ChunkPos lastChunk = alertHistory.get(alertHistory.size() - 1);
+            int startY = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, lastChunk.getCenterX(), lastChunk.getCenterZ());
+            int endY = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, predictedVector.getCenterX(), predictedVector.getCenterZ());
+            event.renderer.line(
+                lastChunk.getCenterX(), startY, lastChunk.getCenterZ(),
+                predictedVector.getCenterX(), endY, predictedVector.getCenterZ(),
+                vectorColor
+            );
+        }
 
         for (ChunkPos cPos : alertedChunks) {
             double minX = cPos.getStartX();
