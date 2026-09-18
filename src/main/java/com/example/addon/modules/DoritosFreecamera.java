@@ -11,6 +11,8 @@ import meteordevelopment.orbit.EventHandler;
 public class DoritosFreecamera extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgMovement = settings.createGroup("Movement");
+public final Setting<Boolean> interactFromPlayer = sgGeneral.add(new BoolSetting.Builder().name("interact-from-player").description("Forces all block breaking and item usage to originate exactly from the player's physical body/head instead of the freecam.").defaultValue(true).build());
+
 
     private final Setting<Boolean> continueWalking = sgMovement.add(new BoolSetting.Builder().name("continue-walking").description("Keep the player walking in the last direction when freecam starts.").defaultValue(false).build());
     private final Setting<Boolean> continueSneak = sgMovement.add(new BoolSetting.Builder().name("continue-sneak").description("Keep the player sneaking while in freecam.").defaultValue(false).build());
