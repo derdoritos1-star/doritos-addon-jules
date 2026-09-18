@@ -24,6 +24,13 @@ import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
+
+import net.minecraft.entity.decoration.ArmorStandEntity;
+import net.minecraft.entity.passive.VillagerEntity;
+import net.minecraft.sound.SoundEvents;
+import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.sound.SoundEvent;
+
 import net.minecraft.entity.passive.PassiveEntity;
 import net.minecraft.network.packet.s2c.play.ParticleS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundFromEntityS2CPacket;
@@ -103,11 +110,24 @@ public class SusChunkFinder extends Module {
             }
         }
 
-        // Entity Sniffing Below Y=0
-        for (Entity entity : mc.world.getEntities()) {
-            if (entity.getY() < 0 && (entity instanceof PassiveEntity || entity instanceof ItemFrameEntity)) {
+        // Entity Sniffing (Lead Detection)
+        if (mc.player.age % 20 == 0) {
+            Map<ChunkPos, Integer> passiveCounts = new java.util.HashMap<>();
+            for (Entity entity : mc.world.getEntities()) {
                 ChunkPos cPos = entity.getChunkPos();
-                addScore(cPos, 10); // Adding smaller score constantly is safer than massive score for tick loop
+                if (alertedChunks.contains(cPos)) continue;
+
+                if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity) {
+                    addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands
+                } else if (entity instanceof PassiveEntity || entity instanceof VillagerEntity) {
+                    passiveCounts.put(cPos, passiveCounts.getOrDefault(cPos, 0) + 1);
+                }
+            }
+
+            for (Map.Entry<ChunkPos, Integer> entry : passiveCounts.entrySet()) {
+                if (entry.getValue() > 12) { // 12+ animals/villagers is a farm
+                    addScore(entry.getKey(), anomalyThreshold.get());
+                }
             }
         }
     }
@@ -119,17 +139,33 @@ public class SusChunkFinder extends Module {
 
         int localScore = 0;
 
+        // 1. Scan Block Entities as a fallback (if anti-xray happens to leak them)
         for (BlockPos pos : chunk.getBlockEntityPositions()) {
-            if (pos.getY() < 0) {
-                BlockEntity be = chunk.getBlockEntity(pos);
-                if (be != null) {
-                    BlockEntityType<?> type = be.getType();
-                    if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST ||
-                        type == BlockEntityType.BARREL || type == BlockEntityType.SHULKER_BOX ||
-                        type == BlockEntityType.HOPPER) {
-                        localScore += 20; // 20 score per container
-                    }
+            net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+            if (be != null) {
+                net.minecraft.block.entity.BlockEntityType<?> type = be.getType();
+                if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST ||
+                    type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX ||
+                    type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
+                    localScore += 20;
                 }
+            }
+        }
+
+        // 2. Scan for unobfuscated trace blocks (Redstone, Farmland, Glass, Beds)
+        for (int i = 0; i < chunk.getSectionArray().length; i++) {
+            ChunkSection section = chunk.getSectionArray()[i];
+            if (section == null || section.isEmpty()) continue;
+
+            if (section.hasAny(state -> {
+                Block b = state.getBlock();
+                return b == Blocks.FARMLAND || b == Blocks.REDSTONE_WIRE || b == Blocks.REPEATER ||
+                       b == Blocks.COMPARATOR || b == Blocks.OBSERVER || b == Blocks.PISTON ||
+                       b == Blocks.STICKY_PISTON || b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
+                       b == Blocks.END_ROD || b instanceof net.minecraft.block.BedBlock;
+            })) {
+                localScore += anomalyThreshold.get(); // Instant alert if trace blocks found
+                break;
             }
         }
 
@@ -137,7 +173,6 @@ public class SusChunkFinder extends Module {
             addScore(cPos, localScore);
         }
     }
-
     @EventHandler
     private void onPacketReceive(PacketEvent.Receive event) {
         if (mc.world == null || mc.player == null) return;
