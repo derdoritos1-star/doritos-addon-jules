@@ -5,6 +5,7 @@ import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.events.world.ChunkDataEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.renderer.text.TextRenderer;
 import meteordevelopment.meteorclient.settings.*;
@@ -14,25 +15,22 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-
-import net.minecraft.block.DoorBlock;
-import net.minecraft.block.TrapdoorBlock;
-
 import net.minecraft.block.Blocks;
+import net.minecraft.block.BlockState;
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.passive.PassiveEntity;
-import net.minecraft.entity.passive.TameableEntity;
 import net.minecraft.entity.passive.VillagerEntity;
+import net.minecraft.entity.passive.TameableEntity;
 import net.minecraft.entity.vehicle.ChestMinecartEntity;
 import net.minecraft.entity.vehicle.HopperMinecartEntity;
 import net.minecraft.network.packet.s2c.play.ParticleS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundFromEntityS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket;
 import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.LightUpdateS2CPacket;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.text.Text;
@@ -40,12 +38,11 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.ChunkSection;
+import net.minecraft.block.DoorBlock;
+import net.minecraft.block.TrapdoorBlock;
 
-import net.minecraft.network.packet.s2c.play.LightUpdateS2CPacket;
 import java.util.ArrayList;
 import java.util.List;
-
-
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,14 +53,13 @@ public class SusChunkFinder extends Module {
     private final SettingGroup sgNotifications = settings.createGroup("Notifications");
 
     public enum LoggingMode { Chat, ActionBar, Toast, None }
-    public enum TriggerMode { All, Redstone, StorageBase, ExcavatedArea }
+    public enum TriggerMode { All, Redstone, StorageBase }
 
     private final Setting<TriggerMode> triggerMode = sgGeneral.add(new EnumSetting.Builder<TriggerMode>().name("trigger-mode").description("What to search for.").defaultValue(TriggerMode.All).build());
 
     private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder().name("scan-radius").description("Radius in chunks to scan around player.").defaultValue(4).sliderRange(1, 32).build());
     private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
 
-    private final Setting<Integer> excavationThreshold = sgGeneral.add(new IntSetting.Builder().name("excavation-threshold").description("Minimum Air blocks required below Y=0 to flag an Excavated Area. 500+ filters mineshafts.").defaultValue(500).sliderRange(150, 4096).build());
     private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(15).sliderRange(5, 100).build());
     private final Setting<Integer> surfaceTraceMaxY = sgGeneral.add(new IntSetting.Builder().name("surface-trace-max-y").description("Maximum Y level to scan for unobfuscated trace blocks (Glass, Beds).").defaultValue(50).sliderRange(0, 320).build());
 
@@ -126,15 +122,20 @@ public class SusChunkFinder extends Module {
                 int dx2 = p3.x - p2.x;
                 int dz2 = p3.z - p2.z;
 
-                // If moving in a consistent straight line
-                if (Math.signum(dx1) == Math.signum(dx2) && Math.signum(dz1) == Math.signum(dz2)) {
-                    if (dx1 != 0 || dz1 != 0) {
-                        predictedVector = new ChunkPos(p3.x + (dx2 * 10), p3.z + (dz2 * 10)); // Project 10 chunks forward
-                    }
+                // Vector collinearity check (Cross product == 0 indicates identical line trajectory)
+                if ((dx1 * dz2 - dz1 * dx2) == 0 && (dx1 != 0 || dz1 != 0)) {
+                    predictedVector = new ChunkPos(p3.x + (dx2 * 10), p3.z + (dz2 * 10)); // Project 10 chunks forward
                 }
             }
         }
     }
+
+    @EventHandler
+    private void onChunkData(ChunkDataEvent event) {
+        if (mc.world == null) return;
+        processChunk(event.chunk());
+    }
+
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
@@ -148,44 +149,37 @@ public class SusChunkFinder extends Module {
         chunkScores.keySet().removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
         if (alertedChunks.isEmpty()) { alertHistory.clear(); soundHeatmap.clear(); predictedVector = null; }
 
-        int radius = scanRadius.get();
-
-        for (int x = -radius; x <= radius; x++) {
-            for (int z = -radius; z <= radius; z++) {
-                int cx = playerChunk.x + x;
-                int cz = playerChunk.z + z;
-
-                if (mc.world.getChunkManager().isChunkLoaded(cx, cz)) {
-                    net.minecraft.world.chunk.WorldChunk chunk = mc.world.getChunkManager().getWorldChunk(cx, cz);
-                    if (chunk != null) {
-                        processChunk(chunk);
-                    }
-                }
-            }
-        }
-
         // Entity Sniffing (Lead Detection)
         TriggerMode mode = triggerMode.get();
         if (mode == TriggerMode.All || mode == TriggerMode.StorageBase) {
-            Map<ChunkPos, Integer> passiveCounts = new java.util.HashMap<>();
+            Map<ChunkPos, Integer> entityCounts = new java.util.HashMap<>();
+            Map<ChunkPos, Integer> minecartCounts = new java.util.HashMap<>();
+
             for (Entity entity : mc.world.getEntities()) {
                 ChunkPos cPos = entity.getChunkPos();
                 if (alertedChunks.contains(cPos)) continue;
 
-                if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity ||
-                    entity instanceof HopperMinecartEntity) {
-                    addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands/storage carts
+                if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity) {
+                    addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands
                 } else if (entity.hasCustomName()) {
                     addScore(cPos, anomalyThreshold.get()); // Named entities = guaranteed player
                 } else if (entity instanceof TameableEntity tameable && tameable.isTamed()) {
                     addScore(cPos, anomalyThreshold.get()); // Pets = guaranteed base
+                } else if (entity instanceof ChestMinecartEntity || entity instanceof HopperMinecartEntity) {
+                    minecartCounts.put(cPos, minecartCounts.getOrDefault(cPos, 0) + 1);
                 } else if (entity instanceof PassiveEntity || entity instanceof VillagerEntity) {
-                    passiveCounts.put(cPos, passiveCounts.getOrDefault(cPos, 0) + 1);
+                    entityCounts.put(cPos, entityCounts.getOrDefault(cPos, 0) + 1);
                 }
             }
 
-            for (Map.Entry<ChunkPos, Integer> entry : passiveCounts.entrySet()) {
+            for (Map.Entry<ChunkPos, Integer> entry : entityCounts.entrySet()) {
                 if (entry.getValue() >= minFarmEntities.get()) { // Confirmed farm, avoids natural herds
+                    addScore(entry.getKey(), anomalyThreshold.get());
+                }
+            }
+
+            for (Map.Entry<ChunkPos, Integer> entry : minecartCounts.entrySet()) {
+                if (entry.getValue() >= 3) { // 3+ storage carts indicates a stash/farm, bypassing standard mineshafts
                     addScore(entry.getKey(), anomalyThreshold.get());
                 }
             }
@@ -265,29 +259,6 @@ public class SusChunkFinder extends Module {
                 }
             }
 
-            // Optional: Re-introduce optimized Excavated Area check if enabled
-            if (mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) {
-                if (worldYStart < 0) {
-                    int airLimit = excavationThreshold.get();
-                    int airCount = 0;
-                    for (int bx = 0; bx < 16; bx++) {
-                        for (int by = 0; by < 16; by++) {
-                            for (int bz = 0; bz < 16; bz++) {
-                                if (section.getBlockState(bx, by, bz).isOf(Blocks.AIR)) {
-                                    airCount++;
-                                    if (airCount >= airLimit) {
-                                        localScore += anomalyThreshold.get();
-                                        break;
-                                    }
-                                }
-                            }
-                            if (airCount >= airLimit) break;
-                        }
-                        if (airCount >= airLimit) break;
-                    }
-                }
-            }
-
             if (localScore >= anomalyThreshold.get()) break;
         }
 
@@ -308,7 +279,7 @@ public class SusChunkFinder extends Module {
                 if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST ||
                     type == BlockEntityType.BARREL || type == BlockEntityType.SHULKER_BOX ||
                     type == BlockEntityType.HOPPER) {
-                    addScore(cPos, anomalyThreshold.get());
+                    addScore(cPos, 20);
                 }
             }
         }
@@ -316,24 +287,40 @@ public class SusChunkFinder extends Module {
             // Unobfuscatable Light Update Sniffing
             ChunkPos pos = new ChunkPos(packet.getChunkX(), packet.getChunkZ());
             if (alertedChunks.contains(pos)) return;
-            // The anti-cheat calculates block light for torches/furnaces but hides the block.
-            // If the server sends a block-light packet updates, it means something changed locally.
-            // We flag it implicitly if it's underground.
             addScore(pos, anomalyThreshold.get());
         }
         else if (event.packet instanceof PlaySoundS2CPacket packet) {
             if (packet.getY() < 0) {
-                ChunkPos pos = new ChunkPos((int) packet.getX() >> 4, (int) packet.getZ() >> 4);
-                addScore(pos, anomalyThreshold.get()); // Massive score
-                BlockPos exactPos = new BlockPos((int)packet.getX(), (int)packet.getY(), (int)packet.getZ());
-                if (soundHeatmap.size() < 500) soundHeatmap.add(exactPos);
+                String soundName = packet.getSound().value().id().getPath().toLowerCase();
+
+                // Smart Sound Filtering (Player interactions only)
+                if (soundName.contains("chest.open") || soundName.contains("chest.close") ||
+                    soundName.contains("barrel.open") || soundName.contains("anvil.use") ||
+                    soundName.contains("door.open")) {
+
+                    ChunkPos pos = new ChunkPos((int) packet.getX() >> 4, (int) packet.getZ() >> 4);
+                    addScore(pos, anomalyThreshold.get()); // Massive score
+                    BlockPos exactPos = new BlockPos((int)packet.getX(), (int)packet.getY(), (int)packet.getZ());
+
+                    if (soundHeatmap.size() >= 500) soundHeatmap.remove(0);
+                    soundHeatmap.add(exactPos);
+                }
             }
         } else if (event.packet instanceof PlaySoundFromEntityS2CPacket packet) {
             Entity entity = mc.world.getEntityById(packet.getEntityId());
             if (entity != null && entity.getY() < 0) {
-                ChunkPos pos = new ChunkPos((int) entity.getX() >> 4, (int) entity.getZ() >> 4);
-                addScore(pos, anomalyThreshold.get());
-                if (soundHeatmap.size() < 500) soundHeatmap.add(entity.getBlockPos());
+                String soundName = packet.getSound().value().id().getPath().toLowerCase();
+
+                if (soundName.contains("chest.open") || soundName.contains("chest.close") ||
+                    soundName.contains("barrel.open") || soundName.contains("anvil.use") ||
+                    soundName.contains("door.open")) {
+
+                    ChunkPos pos = new ChunkPos((int) entity.getX() >> 4, (int) entity.getZ() >> 4);
+                    addScore(pos, anomalyThreshold.get());
+
+                    if (soundHeatmap.size() >= 500) soundHeatmap.remove(0);
+                    soundHeatmap.add(entity.getBlockPos());
+                }
             }
         } else if (event.packet instanceof ParticleS2CPacket packet) {
             if (packet.getY() < 0) {
