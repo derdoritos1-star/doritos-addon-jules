@@ -1,0 +1,36 @@
+name: Publish Development Build
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Generate timestamp
+        id: time
+        run: echo "timestamp=$(date +'%d.%m.%y_%H-%M')" >> $GITHUB_OUTPUT
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create dev-${{ steps.time.outputs.timestamp }} build/libs/*.jar --title "doritos addon $(date +'%d.%m.%y %H:%M')" --prerelease
