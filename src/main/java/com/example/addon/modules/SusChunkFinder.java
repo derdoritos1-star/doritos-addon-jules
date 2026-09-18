@@ -30,7 +30,6 @@ import net.minecraft.network.packet.s2c.play.ParticleS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundFromEntityS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket;
 import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
-import net.minecraft.network.packet.s2c.play.LightUpdateS2CPacket;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.text.Text;
@@ -89,8 +88,24 @@ public class SusChunkFinder extends Module {
         alertHistory.clear();
         soundHeatmap.clear();
         predictedVector = null;
-    }
 
+        if (mc.world != null && mc.player != null) {
+            ChunkPos playerChunk = mc.player.getChunkPos();
+            int radius = scanRadius.get();
+            for (int x = -radius; x <= radius; x++) {
+                for (int z = -radius; z <= radius; z++) {
+                    int cx = playerChunk.x + x;
+                    int cz = playerChunk.z + z;
+                    if (mc.world.getChunkManager().isChunkLoaded(cx, cz)) {
+                        net.minecraft.world.chunk.WorldChunk chunk = mc.world.getChunkManager().getWorldChunk(cx, cz);
+                        if (chunk != null) {
+                            processChunk(chunk);
+                        }
+                    }
+                }
+            }
+        }
+    }
     @Override
     public void onDeactivate() {
         chunkScores.clear();
@@ -123,8 +138,11 @@ public class SusChunkFinder extends Module {
                 int dz2 = p3.z - p2.z;
 
                 // Vector collinearity check (Cross product == 0 indicates identical line trajectory)
-                if ((dx1 * dz2 - dz1 * dx2) == 0 && (dx1 != 0 || dz1 != 0)) {
+                // Dot product check ensures the direction hasn't reversed (180 degree turn)
+                if ((dx1 * dz2 - dz1 * dx2) == 0 && (dx1 * dx2 + dz1 * dz2) > 0 && (dx1 != 0 || dz1 != 0)) {
                     predictedVector = new ChunkPos(p3.x + (dx2 * 10), p3.z + (dz2 * 10)); // Project 10 chunks forward
+                } else {
+                    predictedVector = null; // Trajectory broken, clear prediction
                 }
             }
         }
@@ -282,12 +300,6 @@ public class SusChunkFinder extends Module {
                     addScore(cPos, 20);
                 }
             }
-        }
-        else if (event.packet instanceof LightUpdateS2CPacket packet) {
-            // Unobfuscatable Light Update Sniffing
-            ChunkPos pos = new ChunkPos(packet.getChunkX(), packet.getChunkZ());
-            if (alertedChunks.contains(pos)) return;
-            addScore(pos, anomalyThreshold.get());
         }
         else if (event.packet instanceof PlaySoundS2CPacket packet) {
             if (packet.getY() < 0) {
