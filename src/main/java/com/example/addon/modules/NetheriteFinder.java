@@ -185,6 +185,9 @@ public class NetheriteFinder extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
+
+        if (mc.player.age % 5 != 0) return; // OPTIMIZATION: Process queues only every 5 ticks
+
         ticksSinceAlert++;
 
         ChunkSectionPos playerSec = ChunkSectionPos.from(mc.player.getBlockPos());
@@ -235,9 +238,9 @@ public class NetheriteFinder extends Module {
         int cz = sec.getMinZ();
 
         for (int i = 0; i < 50; i++) {
-            int rx = cx + (int)(Math.random() * 14) + 1;
-            int ry = cy + (int)(Math.random() * 14) + 1;
-            int rz = cz + (int)(Math.random() * 14) + 1;
+            int rx = cx + 4 + (int)(Math.random() * 8);
+            int ry = cy + 4 + (int)(Math.random() * 8);
+            int rz = cz + 4 + (int)(Math.random() * 8);
             BlockPos pos = new BlockPos(rx, ry, rz);
             if (!mc.world.getBlockState(pos).isAir()) {
                 return pos;
@@ -400,7 +403,14 @@ public class NetheriteFinder extends Module {
                 if (hasEntered) {
                     BlockPos target = blastTargets.get(sec);
                     if (target != null) {
-                        event.renderer.box(target, redSide, redLine, ShapeMode.Both, 0);
+                        // Render an 8x8 cube centered around the target coordinate
+                        double minX = target.getX() - 3.5;
+                        double minY = target.getY() - 3.5;
+                        double minZ = target.getZ() - 3.5;
+                        double maxX = target.getX() + 4.5;
+                        double maxY = target.getY() + 4.5;
+                        double maxZ = target.getZ() + 4.5;
+                        event.renderer.box(minX, minY, minZ, maxX, maxY, maxZ, redSide, redLine, ShapeMode.Both, 0);
                     }
                 }
 

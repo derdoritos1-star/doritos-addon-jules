@@ -11,10 +11,16 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
+import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+
+import net.minecraft.block.entity.BlockEntityType;
+import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
+
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
@@ -78,6 +84,8 @@ public class SusChunkFinder extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
 
+        if (mc.player.age % 20 != 0) return; // OPTIMIZATION: Only run 1 time per second
+
         ChunkPos playerChunk = mc.player.getChunkPos();
         int radius = scanRadius.get();
 
@@ -104,54 +112,25 @@ public class SusChunkFinder extends Module {
         }
     }
 
+
     private void processChunk(net.minecraft.world.chunk.WorldChunk chunk) {
         ChunkPos cPos = chunk.getPos();
         if (alertedChunks.contains(cPos)) return;
 
         int localScore = 0;
-        int airBlocks = 0;
 
-        for (int i = 0; i < chunk.getSectionArray().length; i++) {
-            ChunkSection section = chunk.getSectionArray()[i];
-            if (section == null || section.isEmpty()) continue;
-
-            int sectionY = chunk.getBottomSectionCoord() + i;
-            int worldYStart = sectionY * 16;
-
-            // Only scan Y = -64 to Y = 0
-            if (worldYStart >= 0 || worldYStart < -64) continue;
-
-            for (int bx = 0; bx < 16; bx++) {
-                for (int by = 0; by < 16; by++) {
-                    for (int bz = 0; bz < 16; bz++) {
-                        int worldY = worldYStart + by;
-                        if (worldY >= 0) continue; // Strict check just in case
-
-                        BlockState state = section.getBlockState(bx, by, bz);
-                        Block block = state.getBlock();
-
-                        // 1. Air-Gap Detection
-                        if (block == Blocks.AIR) {
-                            airBlocks++;
-                        }
-
-                        // 2. Block-Light Leak Detection
-                        if (block == Blocks.DEEPSLATE || block == Blocks.BEDROCK) {
-                            BlockPos pos = new BlockPos(cPos.getStartX() + bx, worldY, cPos.getStartZ() + bz);
-                            int light = mc.world.getLightLevel(LightType.BLOCK, pos);
-                            if (light > 0) {
-                                localScore += 50; // Massive score for light leaking through disguised solid blocks
-                            }
-                        }
+        for (BlockPos pos : chunk.getBlockEntityPositions()) {
+            if (pos.getY() < 0) {
+                BlockEntity be = chunk.getBlockEntity(pos);
+                if (be != null) {
+                    BlockEntityType<?> type = be.getType();
+                    if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST ||
+                        type == BlockEntityType.BARREL || type == BlockEntityType.SHULKER_BOX ||
+                        type == BlockEntityType.HOPPER) {
+                        localScore += 20; // 20 score per container
                     }
                 }
             }
-        }
-
-        // Air-Gap Pattern: If there are significant standard AIR blocks underground, flag it.
-        // CAVE_AIR is normal, but standard AIR usually implies an artificial hollow space.
-        if (airBlocks > 10) {
-            localScore += airBlocks * 2;
         }
 
         if (localScore > 0) {
@@ -163,7 +142,19 @@ public class SusChunkFinder extends Module {
     private void onPacketReceive(PacketEvent.Receive event) {
         if (mc.world == null || mc.player == null) return;
 
-        if (event.packet instanceof PlaySoundS2CPacket packet) {
+        if (event.packet instanceof BlockEntityUpdateS2CPacket packet) {
+            BlockPos pos = packet.getPos();
+            if (pos.getY() < 0) {
+                ChunkPos cPos = new ChunkPos(pos);
+                BlockEntityType<?> type = packet.getBlockEntityType();
+                if (type == BlockEntityType.CHEST || type == BlockEntityType.TRAPPED_CHEST ||
+                    type == BlockEntityType.BARREL || type == BlockEntityType.SHULKER_BOX ||
+                    type == BlockEntityType.HOPPER) {
+                    addScore(cPos, 20);
+                }
+            }
+        }
+        else if (event.packet instanceof PlaySoundS2CPacket packet) {
             if (packet.getY() < 0) {
                 ChunkPos pos = new ChunkPos((int) packet.getX() >> 4, (int) packet.getZ() >> 4);
                 addScore(pos, 200); // Massive score
@@ -211,10 +202,18 @@ public class SusChunkFinder extends Module {
             double minZ = cPos.getStartZ();
             double maxX = cPos.getEndX() + 1.0;
             double maxZ = cPos.getEndZ() + 1.0;
-            double minY = -64.0;
-            double maxY = 0.0; // Render box exactly in the sub-zero zone
 
-            event.renderer.box(minX, minY, minZ, maxX, maxY, maxZ, chunkGridColor.get(), chunkGridColor.get(), ShapeMode.Lines, 0);
+            // Vertical beacon beam
+            event.renderer.box(minX, -64.0, minZ, maxX, 320.0, maxZ, chunkGridColor.get(), chunkGridColor.get(), ShapeMode.Lines, 0);
+
+            // Tracer line from player to chunk center
+            double centerX = cPos.getCenterX();
+            double centerZ = cPos.getCenterZ();
+            event.renderer.line(
+                RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
+                centerX, -64.0, centerZ,
+                chunkGridColor.get()
+            );
         }
     }
 
