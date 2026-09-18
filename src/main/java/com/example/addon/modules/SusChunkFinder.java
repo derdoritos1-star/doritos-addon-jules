@@ -16,31 +16,23 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
-
-import net.minecraft.block.entity.BlockEntityType;
-import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
-
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.decoration.ItemFrameEntity;
-
 import net.minecraft.entity.decoration.ArmorStandEntity;
-import net.minecraft.entity.passive.VillagerEntity;
-import net.minecraft.entity.vehicle.HopperMinecartEntity;
-import net.minecraft.entity.vehicle.ChestMinecartEntity;
-import net.minecraft.sound.SoundEvents;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.sound.SoundEvent;
-
+import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.passive.PassiveEntity;
+import net.minecraft.entity.passive.VillagerEntity;
+import net.minecraft.entity.vehicle.ChestMinecartEntity;
+import net.minecraft.entity.vehicle.HopperMinecartEntity;
 import net.minecraft.network.packet.s2c.play.ParticleS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundFromEntityS2CPacket;
 import net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket;
+import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
+import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.LightType;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.ChunkSection;
 
@@ -58,12 +50,12 @@ public class SusChunkFinder extends Module {
 
     private final Setting<TriggerMode> triggerMode = sgGeneral.add(new EnumSetting.Builder<TriggerMode>().name("trigger-mode").description("What to search for.").defaultValue(TriggerMode.All).build());
 
+    private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder().name("scan-radius").description("Radius in chunks to scan around player.").defaultValue(4).sliderRange(1, 32).build());
+    private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
+
     private final Setting<Integer> excavationThreshold = sgGeneral.add(new IntSetting.Builder().name("excavation-threshold").description("Minimum Air blocks required below Y=0 to flag an Excavated Area. 500+ filters mineshafts.").defaultValue(500).sliderRange(150, 4096).build());
     private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(25).sliderRange(5, 100).build());
     private final Setting<Integer> surfaceTraceMaxY = sgGeneral.add(new IntSetting.Builder().name("surface-trace-max-y").description("Maximum Y level to scan for unobfuscated trace blocks (Glass, Beds).").defaultValue(50).sliderRange(0, 320).build());
-
-    private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder().name("scan-radius").description("Radius in chunks to scan around player.").defaultValue(4).sliderRange(1, 32).build());
-    private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
 
     private final Setting<SettingColor> chunkGridColor = sgRender.add(new ColorSetting.Builder().name("chunk-grid-color").description("Color of the highlighted chunk borders.").defaultValue(new SettingColor(255, 0, 0, 255)).build());
 
@@ -145,7 +137,7 @@ public class SusChunkFinder extends Module {
             }
 
             for (Map.Entry<ChunkPos, Integer> entry : passiveCounts.entrySet()) {
-                if (entry.getValue() >= minFarmEntities.get()) { // 25+ animals/villagers is a confirmed farm, avoids natural herds
+                if (entry.getValue() >= minFarmEntities.get()) { // Confirmed farm, avoids natural herds
                     addScore(entry.getKey(), anomalyThreshold.get());
                 }
             }
@@ -226,12 +218,6 @@ public class SusChunkFinder extends Module {
                                     }
                                 }
                             }
-                            if (airCount >= airLimit) break;
-                        }
-                        if (airCount >= airLimit) break;
-                    }
-                }
-            }
                             if (airCount >= airLimit) break;
                         }
                         if (airCount >= airLimit) break;
@@ -362,5 +348,3 @@ public class SusChunkFinder extends Module {
         }
     }
 }
-// trigger CI
-// trigger CI again
