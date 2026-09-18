@@ -56,6 +56,10 @@ public class SusChunkFinder extends Module {
 
     private final Setting<TriggerMode> triggerMode = sgGeneral.add(new EnumSetting.Builder<TriggerMode>().name("trigger-mode").description("What to search for.").defaultValue(TriggerMode.All).build());
 
+    private final Setting<Boolean> ignore3x3Tunnels = sgGeneral.add(new BoolSetting.Builder().name("ignore-3x3-tunnels").description("Ignores standard 3x3 pickaxe mining tunnels when detecting excavated areas.").defaultValue(true).build());
+    private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(25).sliderRange(5, 100).build());
+    private final Setting<Integer> surfaceTraceMaxY = sgGeneral.add(new IntSetting.Builder().name("surface-trace-max-y").description("Maximum Y level to scan for unobfuscated trace blocks (Glass, Beds).").defaultValue(50).sliderRange(0, 320).build());
+
     private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder().name("scan-radius").description("Radius in chunks to scan around player.").defaultValue(4).sliderRange(1, 32).build());
     private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
 
@@ -135,7 +139,7 @@ public class SusChunkFinder extends Module {
             }
 
             for (Map.Entry<ChunkPos, Integer> entry : passiveCounts.entrySet()) {
-                if (entry.getValue() > 25) { // 25+ animals/villagers is a confirmed farm, avoids natural herds
+                if (entry.getValue() >= minFarmEntities.get()) { // 25+ animals/villagers is a confirmed farm, avoids natural herds
                     addScore(entry.getKey(), anomalyThreshold.get());
                 }
             }
@@ -188,8 +192,8 @@ public class SusChunkFinder extends Module {
                 }
             }
 
-            // Storage / Base Trace Leads (Only check below Y=50 to avoid Surface Villages)
-            if (worldYStart < 50 && (mode == TriggerMode.All || mode == TriggerMode.StorageBase)) {
+            // Storage / Base Trace Leads (Only check below configured Y to avoid Surface Villages)
+            if (worldYStart < surfaceTraceMaxY.get() && (mode == TriggerMode.All || mode == TriggerMode.StorageBase)) {
                 if (section.hasAny(state -> {
                     Block b = state.getBlock();
                     return b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
@@ -197,6 +201,29 @@ public class SusChunkFinder extends Module {
                            b instanceof net.minecraft.block.BedBlock;
                 })) {
                     localScore += anomalyThreshold.get();
+                }
+            }
+
+            // Optional: Re-introduce optimized Excavated Area check if enabled
+            if (mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) {
+                if (worldYStart < 0) {
+                    int airLimit = ignore3x3Tunnels.get() ? 150 : 50; // 3x3 tunnel = 144 air blocks per section
+                    int airCount = 0;
+                    for (int bx = 0; bx < 16; bx++) {
+                        for (int by = 0; by < 16; by++) {
+                            for (int bz = 0; bz < 16; bz++) {
+                                if (section.getBlockState(bx, by, bz).isOf(Blocks.AIR)) {
+                                    airCount++;
+                                    if (airCount >= airLimit) {
+                                        localScore += anomalyThreshold.get();
+                                        break;
+                                    }
+                                }
+                            }
+                            if (airCount >= airLimit) break;
+                        }
+                        if (airCount >= airLimit) break;
+                    }
                 }
             }
 
