@@ -12,6 +12,15 @@ import net.minecraft.util.math.Vec3d;
 public class FreecamTweaks extends Module {
     private final SettingGroup sgMovement = settings.createGroup("Movement");
     private final SettingGroup sgRender = settings.createGroup("Render");
+    private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    public final Setting<Boolean> interactFromPlayer = sgGeneral.add(new BoolSetting.Builder()
+        .name("interact-from-player")
+        .description("Forces all block breaking and item usage to originate from the player's physical body instead of the freecam.")
+        .defaultValue(true)
+        .build()
+    );
+
 
     private final Setting<Boolean> continueWalking = sgMovement.add(new BoolSetting.Builder()
         .name("continue-walking")
