@@ -51,6 +51,9 @@ public class SusChunkFinder extends Module {
     private final SettingGroup sgNotifications = settings.createGroup("Notifications");
 
     public enum LoggingMode { Chat, ActionBar, Toast, None }
+    public enum TriggerMode { All, Redstone, StorageBase, ExcavatedArea }
+
+    private final Setting<TriggerMode> triggerMode = sgGeneral.add(new EnumSetting.Builder<TriggerMode>().name("trigger-mode").description("What to search for.").defaultValue(TriggerMode.All).build());
 
     private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder().name("scan-radius").description("Radius in chunks to scan around player.").defaultValue(4).sliderRange(1, 32).build());
     private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
@@ -111,7 +114,8 @@ public class SusChunkFinder extends Module {
         }
 
         // Entity Sniffing (Lead Detection)
-        if (mc.player.age % 20 == 0) {
+        TriggerMode mode = triggerMode.get();
+        if (mode == TriggerMode.All || mode == TriggerMode.StorageBase) {
             Map<ChunkPos, Integer> passiveCounts = new java.util.HashMap<>();
             for (Entity entity : mc.world.getEntities()) {
                 ChunkPos cPos = entity.getChunkPos();
@@ -125,54 +129,95 @@ public class SusChunkFinder extends Module {
             }
 
             for (Map.Entry<ChunkPos, Integer> entry : passiveCounts.entrySet()) {
-                if (entry.getValue() > 12) { // 12+ animals/villagers is a farm
+                if (entry.getValue() > 25) { // 25+ animals/villagers is a confirmed farm, avoids natural herds
                     addScore(entry.getKey(), anomalyThreshold.get());
                 }
             }
         }
     }
 
-
     private void processChunk(net.minecraft.world.chunk.WorldChunk chunk) {
         ChunkPos cPos = chunk.getPos();
         if (alertedChunks.contains(cPos)) return;
 
         int localScore = 0;
+        TriggerMode mode = triggerMode.get();
 
         // 1. Scan Block Entities as a fallback (if anti-xray happens to leak them)
-        for (BlockPos pos : chunk.getBlockEntityPositions()) {
-            net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
-            if (be != null) {
-                net.minecraft.block.entity.BlockEntityType<?> type = be.getType();
-                if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST ||
-                    type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX ||
-                    type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
-                    localScore += 20;
+        if (mode == TriggerMode.All || mode == TriggerMode.StorageBase) {
+            for (BlockPos pos : chunk.getBlockEntityPositions()) {
+                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+                if (be != null) {
+                    net.minecraft.block.entity.BlockEntityType<?> type = be.getType();
+                    if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST ||
+                        type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX ||
+                        type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
+                        localScore += 20;
+                    }
                 }
             }
         }
 
-        // 2. Scan for unobfuscated trace blocks (Redstone, Farmland, Glass, Beds)
+        // 2. Comprehensive Scan (Excavations & Unobfuscated Traces)
         for (int i = 0; i < chunk.getSectionArray().length; i++) {
             ChunkSection section = chunk.getSectionArray()[i];
             if (section == null || section.isEmpty()) continue;
 
-            if (section.hasAny(state -> {
-                Block b = state.getBlock();
-                return b == Blocks.FARMLAND || b == Blocks.REDSTONE_WIRE || b == Blocks.REPEATER ||
-                       b == Blocks.COMPARATOR || b == Blocks.OBSERVER || b == Blocks.PISTON ||
-                       b == Blocks.STICKY_PISTON || b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
-                       b == Blocks.END_ROD || b instanceof net.minecraft.block.BedBlock;
-            })) {
-                localScore += anomalyThreshold.get(); // Instant alert if trace blocks found
-                break;
+            int sectionY = chunk.getBottomSectionCoord() + i;
+            int worldYStart = sectionY * 16;
+
+            // Ancient City False Positive Filter
+            if (section.hasAny(state -> state.isOf(Blocks.SCULK) || state.isOf(Blocks.SCULK_SENSOR) || state.isOf(Blocks.SCULK_VEIN))) {
+                continue; // Ignore this section to prevent flagging redstone in Ancient Cities
             }
+
+            int standardAirCount = 0;
+
+            for (int bx = 0; bx < 16; bx++) {
+                for (int by = 0; by < 16; by++) {
+                    for (int bz = 0; bz < 16; bz++) {
+                        BlockState state = section.getBlockState(bx, by, bz);
+                        Block b = state.getBlock();
+                        int worldY = worldYStart + by;
+
+                        // Excavated Area Logic (Detecting raw AIR below Y=0 vs CAVE_AIR)
+                        if ((mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) && worldY < 0) {
+                            if (b == Blocks.AIR) standardAirCount++;
+                        }
+
+                        // Redstone Leads
+                        if (mode == TriggerMode.All || mode == TriggerMode.Redstone) {
+                            if (b == Blocks.REDSTONE_WIRE || b == Blocks.REPEATER || b == Blocks.COMPARATOR ||
+                                b == Blocks.OBSERVER || b == Blocks.PISTON || b == Blocks.STICKY_PISTON) {
+                                localScore += anomalyThreshold.get();
+                            }
+                        }
+
+                        // Storage / Base Trace Leads (Only check below Y=50 to avoid Surface Villages)
+                        if (mode == TriggerMode.All || mode == TriggerMode.StorageBase) {
+                            if (worldY < 50 && (b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
+                                                b == Blocks.FARMLAND || b == Blocks.END_ROD ||
+                                                b instanceof net.minecraft.block.BedBlock)) {
+                                localScore += anomalyThreshold.get();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If more than 150 blocks of standard AIR are found deep underground, it's a massive excavated base/stash.
+            if ((mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) && standardAirCount > 150) {
+                localScore += anomalyThreshold.get();
+            }
+
+            if (localScore >= anomalyThreshold.get()) break;
         }
 
         if (localScore > 0) {
             addScore(cPos, localScore);
         }
     }
+
     @EventHandler
     private void onPacketReceive(PacketEvent.Receive event) {
         if (mc.world == null || mc.player == null) return;
@@ -232,22 +277,27 @@ public class SusChunkFinder extends Module {
     private void onRender3D(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
 
+        SettingColor color = chunkGridColor.get();
+        meteordevelopment.meteorclient.utils.render.color.Color outlineColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 255);
+        meteordevelopment.meteorclient.utils.render.color.Color fillColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 60);
+
         for (ChunkPos cPos : alertedChunks) {
-            double minX = cPos.getStartX();
-            double minZ = cPos.getStartZ();
-            double maxX = cPos.getEndX() + 1.0;
-            double maxZ = cPos.getEndZ() + 1.0;
-
-            // Vertical beacon beam
-            event.renderer.box(minX, -64.0, minZ, maxX, 320.0, maxZ, chunkGridColor.get(), chunkGridColor.get(), ShapeMode.Lines, 0);
-
-            // Tracer line from player to chunk center
             double centerX = cPos.getCenterX();
             double centerZ = cPos.getCenterZ();
+
+            // Sleek 2x2 vertical beacon beam centered in the chunk
+            double minX = centerX - 1.0;
+            double minZ = centerZ - 1.0;
+            double maxX = centerX + 1.0;
+            double maxZ = centerZ + 1.0;
+
+            event.renderer.box(minX, -64.0, minZ, maxX, 320.0, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
+
+            // Tracer line from player to beam center
             event.renderer.line(
                 RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
                 centerX, -64.0, centerZ,
-                chunkGridColor.get()
+                outlineColor
             );
         }
     }
