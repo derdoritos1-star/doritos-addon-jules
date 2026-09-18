@@ -27,6 +27,8 @@ import net.minecraft.entity.decoration.ItemFrameEntity;
 
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.entity.passive.VillagerEntity;
+import net.minecraft.entity.vehicle.HopperMinecartEntity;
+import net.minecraft.entity.vehicle.ChestMinecartEntity;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.sound.SoundEvent;
@@ -56,7 +58,7 @@ public class SusChunkFinder extends Module {
 
     private final Setting<TriggerMode> triggerMode = sgGeneral.add(new EnumSetting.Builder<TriggerMode>().name("trigger-mode").description("What to search for.").defaultValue(TriggerMode.All).build());
 
-    private final Setting<Boolean> ignore3x3Tunnels = sgGeneral.add(new BoolSetting.Builder().name("ignore-3x3-tunnels").description("Ignores standard 3x3 pickaxe mining tunnels when detecting excavated areas.").defaultValue(true).build());
+    private final Setting<Integer> excavationThreshold = sgGeneral.add(new IntSetting.Builder().name("excavation-threshold").description("Minimum Air blocks required below Y=0 to flag an Excavated Area. 500+ filters mineshafts.").defaultValue(500).sliderRange(150, 4096).build());
     private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(25).sliderRange(5, 100).build());
     private final Setting<Integer> surfaceTraceMaxY = sgGeneral.add(new IntSetting.Builder().name("surface-trace-max-y").description("Maximum Y level to scan for unobfuscated trace blocks (Glass, Beds).").defaultValue(50).sliderRange(0, 320).build());
 
@@ -64,6 +66,9 @@ public class SusChunkFinder extends Module {
     private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
 
     private final Setting<SettingColor> chunkGridColor = sgRender.add(new ColorSetting.Builder().name("chunk-grid-color").description("Color of the highlighted chunk borders.").defaultValue(new SettingColor(255, 0, 0, 255)).build());
+
+    private final Setting<Boolean> drawTracers = sgRender.add(new BoolSetting.Builder().name("draw-tracers").description("Draw lines from player to flagged chunks.").defaultValue(true).build());
+    private final Setting<Boolean> drawBeacon = sgRender.add(new BoolSetting.Builder().name("draw-beacon").description("Draw highlight on the flagged chunk.").defaultValue(true).build());
 
     private final Setting<LoggingMode> loggingMode = sgNotifications.add(new EnumSetting.Builder<LoggingMode>().name("logging-mode").description("How to notify when a sus chunk is found.").defaultValue(LoggingMode.Chat).build());
 
@@ -131,8 +136,9 @@ public class SusChunkFinder extends Module {
                 ChunkPos cPos = entity.getChunkPos();
                 if (alertedChunks.contains(cPos)) continue;
 
-                if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity) {
-                    addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands
+                if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity ||
+                    entity instanceof ChestMinecartEntity || entity instanceof HopperMinecartEntity) {
+                    addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands/storage carts
                 } else if (entity instanceof PassiveEntity || entity instanceof VillagerEntity) {
                     passiveCounts.put(cPos, passiveCounts.getOrDefault(cPos, 0) + 1);
                 }
@@ -197,7 +203,7 @@ public class SusChunkFinder extends Module {
                 if (section.hasAny(state -> {
                     Block b = state.getBlock();
                     return b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
-                           b == Blocks.FARMLAND || b == Blocks.END_ROD ||
+                           b == Blocks.END_ROD ||
                            b instanceof net.minecraft.block.BedBlock;
                 })) {
                     localScore += anomalyThreshold.get();
@@ -207,7 +213,7 @@ public class SusChunkFinder extends Module {
             // Optional: Re-introduce optimized Excavated Area check if enabled
             if (mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) {
                 if (worldYStart < 0) {
-                    int airLimit = ignore3x3Tunnels.get() ? 150 : 50; // 3x3 tunnel = 144 air blocks per section
+                    int airLimit = excavationThreshold.get();
                     int airCount = 0;
                     for (int bx = 0; bx < 16; bx++) {
                         for (int by = 0; by < 16; by++) {
@@ -220,6 +226,12 @@ public class SusChunkFinder extends Module {
                                     }
                                 }
                             }
+                            if (airCount >= airLimit) break;
+                        }
+                        if (airCount >= airLimit) break;
+                    }
+                }
+            }
                             if (airCount >= airLimit) break;
                         }
                         if (airCount >= airLimit) break;
@@ -307,17 +319,20 @@ public class SusChunkFinder extends Module {
             // Calculate the top surface Y for the center of the chunk
             int surfaceY = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, cPos.getCenterX(), cPos.getCenterZ());
 
-            // Flat red layer 0.5 blocks thick on the surface
-            event.renderer.box(minX, surfaceY, minZ, maxX, surfaceY + 0.5, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
+            if (drawBeacon.get()) {
+                // Flat red layer 0.5 blocks thick on the surface
+                event.renderer.box(minX, surfaceY, minZ, maxX, surfaceY + 0.5, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
+            }
 
-            // Tracer line from player to the center of the flat layer
-            double centerX = cPos.getCenterX();
-            double centerZ = cPos.getCenterZ();
-            event.renderer.line(
-                RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
-                centerX, surfaceY, centerZ,
-                outlineColor
-            );
+            if (drawTracers.get()) {
+                double centerX = cPos.getCenterX();
+                double centerZ = cPos.getCenterZ();
+                event.renderer.line(
+                    RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
+                    centerX, surfaceY, centerZ,
+                    outlineColor
+                );
+            }
         }
     }
 
@@ -348,3 +363,4 @@ public class SusChunkFinder extends Module {
     }
 }
 // trigger CI
+// trigger CI again
