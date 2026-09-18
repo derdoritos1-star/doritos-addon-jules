@@ -54,7 +54,7 @@ public class SusChunkFinder extends Module {
     private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
 
     private final Setting<Integer> excavationThreshold = sgGeneral.add(new IntSetting.Builder().name("excavation-threshold").description("Minimum Air blocks required below Y=0 to flag an Excavated Area. 500+ filters mineshafts.").defaultValue(500).sliderRange(150, 4096).build());
-    private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(25).sliderRange(5, 100).build());
+    private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(15).sliderRange(5, 100).build());
     private final Setting<Integer> surfaceTraceMaxY = sgGeneral.add(new IntSetting.Builder().name("surface-trace-max-y").description("Maximum Y level to scan for unobfuscated trace blocks (Glass, Beds).").defaultValue(50).sliderRange(0, 320).build());
 
     private final Setting<SettingColor> chunkGridColor = sgRender.add(new ColorSetting.Builder().name("chunk-grid-color").description("Color of the highlighted chunk borders.").defaultValue(new SettingColor(255, 0, 0, 255)).build());
@@ -129,7 +129,7 @@ public class SusChunkFinder extends Module {
                 if (alertedChunks.contains(cPos)) continue;
 
                 if (entity instanceof ItemFrameEntity || entity instanceof ArmorStandEntity ||
-                    entity instanceof ChestMinecartEntity || entity instanceof HopperMinecartEntity) {
+                    entity instanceof HopperMinecartEntity) {
                     addScore(cPos, anomalyThreshold.get()); // Instant alert for frames/armor stands/storage carts
                 } else if (entity instanceof PassiveEntity || entity instanceof VillagerEntity) {
                     passiveCounts.put(cPos, passiveCounts.getOrDefault(cPos, 0) + 1);
@@ -195,7 +195,12 @@ public class SusChunkFinder extends Module {
                 if (section.hasAny(state -> {
                     Block b = state.getBlock();
                     return b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
-                           b == Blocks.END_ROD ||
+                           b == Blocks.END_ROD || b == Blocks.ANVIL ||
+                           b == Blocks.BREWING_STAND || b == Blocks.CAULDRON ||
+                           b == Blocks.BOOKSHELF || b == Blocks.JUKEBOX ||
+                           b == Blocks.NOTE_BLOCK || b == Blocks.FURNACE ||
+                           b == Blocks.SMOKER || b == Blocks.BLAST_FURNACE ||
+                           b == Blocks.ENCHANTING_TABLE ||
                            b instanceof net.minecraft.block.BedBlock;
                 })) {
                     localScore += anomalyThreshold.get();
