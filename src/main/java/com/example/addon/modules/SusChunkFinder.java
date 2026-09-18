@@ -39,6 +39,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.LightType;
+import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.ChunkSection;
 
 import java.util.Map;
@@ -97,6 +98,11 @@ public class SusChunkFinder extends Module {
         if (mc.player.age % 20 != 0) return; // OPTIMIZATION: Only run 1 time per second
 
         ChunkPos playerChunk = mc.player.getChunkPos();
+
+        // Clear ghost chunks after /rtp
+        alertedChunks.removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
+        chunkScores.keySet().removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
+
         int radius = scanRadius.get();
 
         for (int x = -radius; x <= radius; x++) {
@@ -158,56 +164,40 @@ public class SusChunkFinder extends Module {
             }
         }
 
-        // 2. Comprehensive Scan (Excavations & Unobfuscated Traces)
+        // 2. Comprehensive Scan (Extremely optimized: O(1) palette checks)
         for (int i = 0; i < chunk.getSectionArray().length; i++) {
             ChunkSection section = chunk.getSectionArray()[i];
             if (section == null || section.isEmpty()) continue;
-
-            int sectionY = chunk.getBottomSectionCoord() + i;
-            int worldYStart = sectionY * 16;
 
             // Ancient City False Positive Filter
             if (section.hasAny(state -> state.isOf(Blocks.SCULK) || state.isOf(Blocks.SCULK_SENSOR) || state.isOf(Blocks.SCULK_VEIN))) {
                 continue; // Ignore this section to prevent flagging redstone in Ancient Cities
             }
 
-            int standardAirCount = 0;
+            int sectionY = chunk.getBottomSectionCoord() + i;
+            int worldYStart = sectionY * 16;
 
-            for (int bx = 0; bx < 16; bx++) {
-                for (int by = 0; by < 16; by++) {
-                    for (int bz = 0; bz < 16; bz++) {
-                        BlockState state = section.getBlockState(bx, by, bz);
-                        Block b = state.getBlock();
-                        int worldY = worldYStart + by;
-
-                        // Excavated Area Logic (Detecting raw AIR below Y=0 vs CAVE_AIR)
-                        if ((mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) && worldY < 0) {
-                            if (b == Blocks.AIR) standardAirCount++;
-                        }
-
-                        // Redstone Leads
-                        if (mode == TriggerMode.All || mode == TriggerMode.Redstone) {
-                            if (b == Blocks.REDSTONE_WIRE || b == Blocks.REPEATER || b == Blocks.COMPARATOR ||
-                                b == Blocks.OBSERVER || b == Blocks.PISTON || b == Blocks.STICKY_PISTON) {
-                                localScore += anomalyThreshold.get();
-                            }
-                        }
-
-                        // Storage / Base Trace Leads (Only check below Y=50 to avoid Surface Villages)
-                        if (mode == TriggerMode.All || mode == TriggerMode.StorageBase) {
-                            if (worldY < 50 && (b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
-                                                b == Blocks.FARMLAND || b == Blocks.END_ROD ||
-                                                b instanceof net.minecraft.block.BedBlock)) {
-                                localScore += anomalyThreshold.get();
-                            }
-                        }
-                    }
+            // Redstone Leads
+            if (mode == TriggerMode.All || mode == TriggerMode.Redstone) {
+                if (section.hasAny(state -> {
+                    Block b = state.getBlock();
+                    return b == Blocks.REDSTONE_WIRE || b == Blocks.REPEATER || b == Blocks.COMPARATOR ||
+                           b == Blocks.OBSERVER || b == Blocks.PISTON || b == Blocks.STICKY_PISTON;
+                })) {
+                    localScore += anomalyThreshold.get();
                 }
             }
 
-            // If more than 150 blocks of standard AIR are found deep underground, it's a massive excavated base/stash.
-            if ((mode == TriggerMode.All || mode == TriggerMode.ExcavatedArea) && standardAirCount > 150) {
-                localScore += anomalyThreshold.get();
+            // Storage / Base Trace Leads (Only check below Y=50 to avoid Surface Villages)
+            if (worldYStart < 50 && (mode == TriggerMode.All || mode == TriggerMode.StorageBase)) {
+                if (section.hasAny(state -> {
+                    Block b = state.getBlock();
+                    return b == Blocks.CRAFTING_TABLE || b == Blocks.GLASS ||
+                           b == Blocks.FARMLAND || b == Blocks.END_ROD ||
+                           b instanceof net.minecraft.block.BedBlock;
+                })) {
+                    localScore += anomalyThreshold.get();
+                }
             }
 
             if (localScore >= anomalyThreshold.get()) break;
@@ -282,21 +272,23 @@ public class SusChunkFinder extends Module {
         meteordevelopment.meteorclient.utils.render.color.Color fillColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 60);
 
         for (ChunkPos cPos : alertedChunks) {
+            double minX = cPos.getStartX();
+            double minZ = cPos.getStartZ();
+            double maxX = cPos.getEndX() + 1.0;
+            double maxZ = cPos.getEndZ() + 1.0;
+
+            // Calculate the top surface Y for the center of the chunk
+            int surfaceY = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, cPos.getCenterX(), cPos.getCenterZ());
+
+            // Flat red layer 0.5 blocks thick on the surface
+            event.renderer.box(minX, surfaceY, minZ, maxX, surfaceY + 0.5, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
+
+            // Tracer line from player to the center of the flat layer
             double centerX = cPos.getCenterX();
             double centerZ = cPos.getCenterZ();
-
-            // Sleek 2x2 vertical beacon beam centered in the chunk
-            double minX = centerX - 1.0;
-            double minZ = centerZ - 1.0;
-            double maxX = centerX + 1.0;
-            double maxZ = centerZ + 1.0;
-
-            event.renderer.box(minX, -64.0, minZ, maxX, 320.0, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
-
-            // Tracer line from player to beam center
             event.renderer.line(
                 RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
-                centerX, -64.0, centerZ,
+                centerX, surfaceY, centerZ,
                 outlineColor
             );
         }
