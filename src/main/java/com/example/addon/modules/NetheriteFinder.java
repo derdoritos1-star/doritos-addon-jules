@@ -66,6 +66,8 @@ public class NetheriteFinder extends Module {
     private final Setting<SettingColor> lineColor = sgRender.add(new ColorSetting.Builder().name("esp-outline-color").defaultValue(new SettingColor(255, 105, 180, 255)).build());
     private final Setting<SettingColor> tracerColor = sgRender.add(new ColorSetting.Builder().name("tracer-color").defaultValue(new SettingColor(255, 105, 180, 255)).build());
 
+    private final Setting<SettingColor> blastSideColor = sgRender.add(new ColorSetting.Builder().name("blast-side-color").defaultValue(new SettingColor(255, 0, 0, 50)).build());
+    private final Setting<SettingColor> blastLineColor = sgRender.add(new ColorSetting.Builder().name("blast-outline-color").defaultValue(new SettingColor(255, 0, 0, 255)).build());
     private final Set<BlockPos> foundBlocks = ConcurrentHashMap.newKeySet();
     private final Set<ChunkSectionPos> suspectedSet = ConcurrentHashMap.newKeySet();
     private final Set<ChunkSectionPos> enteredSections = ConcurrentHashMap.newKeySet();
@@ -401,8 +403,8 @@ public class NetheriteFinder extends Module {
         }
 
         if (espSections.get()) {
-            Color redLine = new Color(255, 0, 0, 255);
-            Color redSide = new Color(255, 0, 0, 50);
+            Color redLine = blastLineColor.get();
+            Color redSide = blastSideColor.get();
 
             for (ChunkSectionPos sec : suspectedSet) {
                 boolean hasEntered = enteredSections.contains(sec);

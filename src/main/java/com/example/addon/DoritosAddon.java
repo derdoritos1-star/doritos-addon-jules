@@ -6,7 +6,7 @@ import com.example.addon.modules.SusChunkFinder;
 import com.example.addon.hud.HudExample;
 import com.example.addon.modules.NetheriteFinder;
 import com.example.addon.modules.DonutSpawnerFinder;
-import com.example.addon.modules.FreecamTweaks;
+import com.example.addon.modules.DoritosFreecamera;
 
 import com.mojang.logging.LogUtils;
 
@@ -35,7 +35,7 @@ public class DoritosAddon extends MeteorAddon {
         Modules.get().add(new DonutSpawnerFinder());
         Modules.get().add(new SusChunkFinder());
         Modules.get().add(new ChunkProfiler());
-        Modules.get().add(new FreecamTweaks());
+        Modules.get().add(new DoritosFreecamera());
 
         Hud.get().register(HudExample.INFO);
 
