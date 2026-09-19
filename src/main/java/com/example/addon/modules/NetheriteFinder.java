@@ -66,7 +66,7 @@ public class NetheriteFinder extends Module {
     private final Setting<SettingColor> lineColor = sgRender.add(new ColorSetting.Builder().name("esp-outline-color").defaultValue(new SettingColor(255, 105, 180, 255)).build());
     private final Setting<SettingColor> tracerColor = sgRender.add(new ColorSetting.Builder().name("tracer-color").defaultValue(new SettingColor(255, 105, 180, 255)).build());
 
-
+    private final Setting<SettingColor> blastSideColor = sgRender.add(new ColorSetting.Builder().name("blast-side-color").defaultValue(new SettingColor(255, 0, 0, 50)).build());
     private final Setting<SettingColor> blastLineColor = sgRender.add(new ColorSetting.Builder().name("blast-outline-color").defaultValue(new SettingColor(255, 0, 0, 255)).build());
     private final Set<BlockPos> foundBlocks = ConcurrentHashMap.newKeySet();
     private final Set<ChunkSectionPos> suspectedSet = ConcurrentHashMap.newKeySet();
@@ -77,6 +77,7 @@ public class NetheriteFinder extends Module {
 
     private final Queue<ChunkSectionPos> suspectedQueue = new ConcurrentLinkedQueue<>();
     private final Map<ChunkSectionPos, Integer> retryCounts = new ConcurrentHashMap<>();
+    private final Map<ChunkSectionPos, BlockPos> blastTargets = new ConcurrentHashMap<>();
 
 
     private volatile BlockPos pendingAlertPos = null;
@@ -84,7 +85,7 @@ public class NetheriteFinder extends Module {
     private volatile java.util.List<BlockPos> blocksToRender = new java.util.ArrayList<>();
 
     public NetheriteFinder() {
-        super(DoritosAddon.CATEGORY, "NetheriteFinder", "Zync-style Palette truster. Never disappears while moving.");
+        super(DoritosAddon.CATEGORY, "NetheriteFinder", "Doritos-style Palette truster. Never disappears while moving.");
     }
 
     @Override
@@ -123,6 +124,7 @@ public class NetheriteFinder extends Module {
         confirmedSections.clear();
         suspectedQueue.clear();
         retryCounts.clear();
+        blastTargets.clear();
         pendingAlertPos = null;
         ticksSinceAlert = alertCooldown.get();
     }
@@ -194,6 +196,15 @@ public class NetheriteFinder extends Module {
 
         if (suspectedSet.contains(playerSec)) {
             enteredSections.add(playerSec);
+
+            BlockPos currentTarget = blastTargets.get(playerSec);
+            if (currentTarget == null) {
+                blastTargets.put(playerSec, generateTarget(playerSec));
+            } else {
+                if (!mc.world.getBlockState(currentTarget).isOf(Blocks.ANCIENT_DEBRIS)) {
+                    blastTargets.put(playerSec, generateTarget(playerSec));
+                }
+            }
         }
 
 
@@ -207,6 +218,7 @@ public class NetheriteFinder extends Module {
             if (confirmedSections.contains(sec) && !hasBlocks) {
                 enteredSections.remove(sec);
                 confirmedSections.remove(sec);
+                blastTargets.remove(sec);
                 return true;
             }
             return false;
@@ -356,6 +368,7 @@ public class NetheriteFinder extends Module {
                 enteredSections.remove(sec);
                 confirmedSections.remove(sec);
                 retryCounts.remove(sec);
+                blastTargets.remove(sec);
             }
             return isFar;
         });
@@ -391,7 +404,7 @@ public class NetheriteFinder extends Module {
 
         if (espSections.get()) {
             Color redLine = blastLineColor.get();
-
+            Color redSide = blastSideColor.get();
 
             for (ChunkSectionPos sec : suspectedSet) {
                 boolean hasEntered = enteredSections.contains(sec);
@@ -400,7 +413,19 @@ public class NetheriteFinder extends Module {
                 event.renderer.box(sec.getMinX(), sec.getMinY(), sec.getMinZ(), sec.getMaxX() + 1, sec.getMaxY() + 1, sec.getMaxZ() + 1, sideColor.get(), currentLineColor, ShapeMode.Lines, 0);
 
 
-
+                if (hasEntered) {
+                    BlockPos target = blastTargets.get(sec);
+                    if (target != null) {
+                        // Render an 8x8 cube centered around the target coordinate
+                        double minX = target.getX() - 3.5;
+                        double minY = target.getY() - 3.5;
+                        double minZ = target.getZ() - 3.5;
+                        double maxX = target.getX() + 4.5;
+                        double maxY = target.getY() + 4.5;
+                        double maxZ = target.getZ() + 4.5;
+                        event.renderer.box(minX, minY, minZ, maxX, maxY, maxZ, redSide, redLine, ShapeMode.Both, 0);
+                    }
+                }
 
             }
         }

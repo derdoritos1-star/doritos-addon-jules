@@ -57,21 +57,15 @@ public class SusChunkFinder extends Module {
     private final Setting<TriggerMode> triggerMode = sgGeneral.add(new EnumSetting.Builder<TriggerMode>().name("trigger-mode").description("What to search for.").defaultValue(TriggerMode.All).build());
 
     private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder().name("scan-radius").description("Radius in chunks to scan around player.").defaultValue(4).sliderRange(1, 32).build());
-    private final Setting<Integer> containerThreshold = sgGeneral.add(new IntSetting.Builder().name("container-threshold").description("Minimum chests/barrels/shulkers to flag.").defaultValue(5).sliderRange(1, 200).build());
     private final Setting<Integer> anomalyThreshold = sgGeneral.add(new IntSetting.Builder().name("anomaly-threshold").description("Score threshold for alerting.").defaultValue(50).sliderRange(1, 1000).build());
-    private final Setting<Boolean> ignoreDungeons = sgGeneral.add(new BoolSetting.Builder().name("ignore-dungeons").description("Ignore mineshafts and ancient cities.").defaultValue(true).build());
 
     private final Setting<Integer> minFarmEntities = sgGeneral.add(new IntSetting.Builder().name("min-farm-entities").description("Minimum passive mobs to flag a farm.").defaultValue(15).sliderRange(5, 100).build());
     private final Setting<Integer> surfaceTraceMaxY = sgGeneral.add(new IntSetting.Builder().name("surface-trace-max-y").description("Maximum Y level to scan for unobfuscated trace blocks (Glass, Beds).").defaultValue(50).sliderRange(0, 320).build());
 
-    private final Setting<SettingColor> gridLowColor = sgRender.add(new ColorSetting.Builder().name("grid-low-score").description("Color for low score chunks.").defaultValue(new SettingColor(255, 255, 0, 100)).build());
-    private final Setting<SettingColor> gridHighColor = sgRender.add(new ColorSetting.Builder().name("grid-high-score").description("Color for high score chunks.").defaultValue(new SettingColor(255, 0, 0, 100)).build());
-    private final Setting<SettingColor> gridLineColor = sgRender.add(new ColorSetting.Builder().name("grid-line-color").description("Color for chunk border lines.").defaultValue(new SettingColor(255, 0, 0, 255)).build());
+    private final Setting<SettingColor> chunkGridColor = sgRender.add(new ColorSetting.Builder().name("chunk-grid-color").description("Color of the highlighted chunk borders.").defaultValue(new SettingColor(255, 0, 0, 255)).build());
 
     private final Setting<Boolean> drawTracers = sgRender.add(new BoolSetting.Builder().name("draw-tracers").description("Draw lines from player to flagged chunks.").defaultValue(true).build());
     private final Setting<Boolean> drawBeacon = sgRender.add(new BoolSetting.Builder().name("draw-beacon").description("Draw highlight on the flagged chunk.").defaultValue(true).build());
-    private final Setting<Boolean> drawText = sgRender.add(new BoolSetting.Builder().name("draw-text").description("Draw 3D text showing the score.").defaultValue(true).build());
-    private final Setting<Double> textScale = sgRender.add(new DoubleSetting.Builder().name("text-scale").description("Scale of the 3D text.").defaultValue(1.5).sliderRange(0.5, 3.0).build());
 
     private final Setting<LoggingMode> loggingMode = sgNotifications.add(new EnumSetting.Builder<LoggingMode>().name("logging-mode").description("How to notify when a sus chunk is found.").defaultValue(LoggingMode.Chat).build());
 
@@ -82,7 +76,6 @@ public class SusChunkFinder extends Module {
     private final List<ChunkPos> alertHistory = new ArrayList<>();
     private final List<BlockPos> soundHeatmap = new ArrayList<>();
     private ChunkPos predictedVector = null;
-    private final java.util.Queue<net.minecraft.world.chunk.WorldChunk> chunkProcessQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     public SusChunkFinder() {
         super(DoritosAddon.CATEGORY, "SusChunkFinder", "Sub-Zero Target Detector. Exploits anti-xray flaws below Y=0.");
@@ -95,7 +88,6 @@ public class SusChunkFinder extends Module {
         alertHistory.clear();
         soundHeatmap.clear();
         predictedVector = null;
-        chunkProcessQueue.clear();
 
         if (mc.world != null && mc.player != null) {
             ChunkPos playerChunk = mc.player.getChunkPos();
@@ -121,7 +113,6 @@ public class SusChunkFinder extends Module {
         alertHistory.clear();
         soundHeatmap.clear();
         predictedVector = null;
-        chunkProcessQueue.clear();
     }
 
     private void addScore(ChunkPos pos, int score) {
@@ -160,31 +151,20 @@ public class SusChunkFinder extends Module {
     @EventHandler
     private void onChunkData(ChunkDataEvent event) {
         if (mc.world == null) return;
-        chunkProcessQueue.offer(event.chunk());
+        processChunk(event.chunk());
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
 
-        // Throttling: Process max 50 chunks per tick
-        int processed = 0;
-        while (!chunkProcessQueue.isEmpty() && processed < 50) {
-            net.minecraft.world.chunk.WorldChunk chunk = chunkProcessQueue.poll();
-            if (chunk != null) processChunk(chunk);
-            processed++;
-        }
-
         if (mc.player.age % 20 != 0) return; // OPTIMIZATION: Only run 1 time per second
 
         ChunkPos playerChunk = mc.player.getChunkPos();
 
-        // Strict Garbage Collection: Clear memory of distant chunks
-        int maxDist = 64; // Approx 1000 blocks
-        alertedChunks.removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > maxDist || Math.abs(cPos.z - playerChunk.z) > maxDist);
-        chunkScores.keySet().removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > maxDist || Math.abs(cPos.z - playerChunk.z) > maxDist);
-        soundHeatmap.removeIf(bPos -> Math.abs((bPos.getX() >> 4) - playerChunk.x) > maxDist || Math.abs((bPos.getZ() >> 4) - playerChunk.z) > maxDist);
-
+        // Clear ghost chunks after /rtp
+        alertedChunks.removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
+        chunkScores.keySet().removeIf(cPos -> Math.abs(cPos.x - playerChunk.x) > 32 || Math.abs(cPos.z - playerChunk.z) > 32);
         if (alertedChunks.isEmpty()) { alertHistory.clear(); soundHeatmap.clear(); predictedVector = null; }
 
         // Entity Sniffing (Lead Detection)
@@ -203,7 +183,7 @@ public class SusChunkFinder extends Module {
                     addScore(cPos, anomalyThreshold.get()); // Named entities = guaranteed player
                 } else if (entity instanceof TameableEntity tameable && tameable.isTamed()) {
                     addScore(cPos, anomalyThreshold.get()); // Pets = guaranteed base
-                } else if (!ignoreDungeons.get() && (entity instanceof ChestMinecartEntity || entity instanceof HopperMinecartEntity)) {
+                } else if (entity instanceof ChestMinecartEntity || entity instanceof HopperMinecartEntity) {
                     minecartCounts.put(cPos, minecartCounts.getOrDefault(cPos, 0) + 1);
                 } else if (entity instanceof PassiveEntity || entity instanceof VillagerEntity) {
                     entityCounts.put(cPos, entityCounts.getOrDefault(cPos, 0) + 1);
@@ -233,22 +213,16 @@ public class SusChunkFinder extends Module {
 
         // 1. Scan Block Entities as a fallback (if anti-xray happens to leak them)
         if (mode == TriggerMode.All || mode == TriggerMode.StorageBase) {
-            int containerCount = 0;
             for (BlockPos pos : chunk.getBlockEntityPositions()) {
                 net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
                 if (be != null) {
                     net.minecraft.block.entity.BlockEntityType<?> type = be.getType();
-                    if (type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST || type == net.minecraft.block.entity.BlockEntityType.ENDER_CHEST) {
+                    if (type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST) {
                         localScore += anomalyThreshold.get(); // 100% Player Stash
                     } else if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
-                        containerCount++;
-                    } else if (type == net.minecraft.block.entity.BlockEntityType.MOB_SPAWNER && !ignoreDungeons.get()) {
-                        localScore += anomalyThreshold.get(); // If we don't ignore dungeons, flag spawners
+                        localScore += 10; // Nerf normal chests to avoid mineshaft flags
                     }
                 }
-            }
-            if (containerCount >= containerThreshold.get()) {
-                localScore += anomalyThreshold.get();
             }
         }
 
@@ -257,9 +231,9 @@ public class SusChunkFinder extends Module {
             ChunkSection section = chunk.getSectionArray()[i];
             if (section == null || section.isEmpty()) continue;
 
-            // Dungeon & Ancient City False Positive Filter
-            if (ignoreDungeons.get() && section.hasAny(state -> state.isOf(Blocks.SCULK) || state.isOf(Blocks.SCULK_SENSOR) || state.isOf(Blocks.SCULK_VEIN) || state.isOf(Blocks.COBWEB) || state.isOf(Blocks.RAIL) || state.isOf(Blocks.SPAWNER))) {
-                continue; // Ignore this section to prevent flagging redstone in Ancient Cities or mineshafts
+            // Ancient City False Positive Filter
+            if (section.hasAny(state -> state.isOf(Blocks.SCULK) || state.isOf(Blocks.SCULK_SENSOR) || state.isOf(Blocks.SCULK_VEIN))) {
+                continue; // Ignore this section to prevent flagging redstone in Ancient Cities
             }
 
             int sectionY = chunk.getBottomSectionCoord() + i;
@@ -380,6 +354,9 @@ public class SusChunkFinder extends Module {
     private void onRender3D(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
 
+        SettingColor color = chunkGridColor.get();
+        meteordevelopment.meteorclient.utils.render.color.Color outlineColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 255);
+        meteordevelopment.meteorclient.utils.render.color.Color fillColor = new meteordevelopment.meteorclient.utils.render.color.Color(color.r, color.g, color.b, 60);
         meteordevelopment.meteorclient.utils.render.color.Color vectorColor = new meteordevelopment.meteorclient.utils.render.color.Color(0, 255, 255, 255); // Cyan for vector
         meteordevelopment.meteorclient.utils.render.color.Color heatColor = new meteordevelopment.meteorclient.utils.render.color.Color(255, 100, 0, 150); // Orange for sounds
 
@@ -409,23 +386,8 @@ public class SusChunkFinder extends Module {
             // Calculate the top surface Y for the center of the chunk
             int surfaceY = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, cPos.getCenterX(), cPos.getCenterZ());
 
-            Integer scoreObj = chunkScores.get(cPos);
-            int score = scoreObj != null ? scoreObj : anomalyThreshold.get();
-
-            // Gradient logic: Blend from low color to high color based on score (clamped at 5x threshold)
-            float ratio = Math.min(1.0f, (float)(score - anomalyThreshold.get()) / (anomalyThreshold.get() * 4.0f));
-            SettingColor low = gridLowColor.get();
-            SettingColor high = gridHighColor.get();
-
-            int r = (int)(low.r + ratio * (high.r - low.r));
-            int g = (int)(low.g + ratio * (high.g - low.g));
-            int b = (int)(low.b + ratio * (high.b - low.b));
-
-            meteordevelopment.meteorclient.utils.render.color.Color fillColor = new meteordevelopment.meteorclient.utils.render.color.Color(r, g, b, 60);
-            meteordevelopment.meteorclient.utils.render.color.Color outlineColor = new meteordevelopment.meteorclient.utils.render.color.Color(gridLineColor.get().r, gridLineColor.get().g, gridLineColor.get().b, 255);
-
             if (drawBeacon.get()) {
-                // Flat layer 0.5 blocks thick on the surface
+                // Flat red layer 0.5 blocks thick on the surface
                 event.renderer.box(minX, surfaceY, minZ, maxX, surfaceY + 0.5, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
             }
 
@@ -445,9 +407,7 @@ public class SusChunkFinder extends Module {
     private void onRender2D(Render2DEvent event) {
         if (mc.world == null || mc.player == null || alertedChunks.isEmpty()) return;
 
-
-
-        // Find closest alerted chunk for HUD
+        // Find closest alerted chunk
         ChunkPos closest = null;
         double minDistance = Double.MAX_VALUE;
         for (ChunkPos cPos : alertedChunks) {
@@ -459,7 +419,7 @@ public class SusChunkFinder extends Module {
         }
 
         if (closest != null) {
-            String text = String.format("⚠ SUS CHUNK DETECTED: %d, %d | Score: %d", closest.getStartX(), closest.getStartZ(), chunkScores.getOrDefault(closest, anomalyThreshold.get()));
+            String text = String.format("⚠ SUB-ZERO TARGET DETECTED: %d, %d", closest.getStartX(), closest.getStartZ());
             TextRenderer.get().begin(1.5, false, true);
             double width = TextRenderer.get().getWidth(text);
             double x = (event.screenWidth - width) / 2.0;
