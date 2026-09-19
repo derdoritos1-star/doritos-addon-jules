@@ -10,8 +10,6 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.meteorclient.utils.render.RenderUtils;
-import meteordevelopment.meteorclient.events.render.Render2DEvent;
-import meteordevelopment.meteorclient.renderer.text.TextRenderer;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.BlockState;
@@ -61,20 +59,15 @@ public class SusChunkFinder extends Module {
     private final Setting<SettingColor> fillColor = sgRender.add(new ColorSetting.Builder().name("fill-color").description("Fill color of the bounding box.").defaultValue(new SettingColor(255, 50, 50, 40)).build());
     private final Setting<SettingColor> outlineColor = sgRender.add(new ColorSetting.Builder().name("outline-color").description("Outline color of the bounding box.").defaultValue(new SettingColor(255, 50, 50, 255)).build());
 
-    private final Setting<Boolean> renderBeam = sgRender.add(new BoolSetting.Builder().name("render-beam").description("Renders a vertical beam indicating the chunk.").defaultValue(true).build());
-    private final Setting<SettingColor> beamColor = sgRender.add(new ColorSetting.Builder().name("beam-color").description("Color of the vertical beam.").defaultValue(new SettingColor(255, 255, 255, 100)).build());
-
-
     private final Set<BlockPos> foundBlocks = ConcurrentHashMap.newKeySet();
     private final Map<ChunkPos, Integer> chunkBlockCount = new ConcurrentHashMap<>();
     private final Set<ChunkPos> alertedChunks = ConcurrentHashMap.newKeySet();
 
-    private final java.util.Queue<ChunkScanRequest> scanQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.Queue<java.util.function.Supplier<Void>> scanQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private int ticksSinceScan = 0;
-    private volatile java.util.List<BlockPos> blocksToRender = new java.util.ArrayList<>();
 
     public SusChunkFinder() {
-        super(DoritosAddon.CATEGORY, "SusChunkFinder", "Finds suspicious chunks on DonutSMP. NOTE: Below Y=0 (Deepslate), servers heavily obfuscate blocks. You must manually dig down to load them!");
+        super(DoritosAddon.CATEGORY, "SusChunkFinder", "Finds suspicious chunks and bases on DonutSMP.");
     }
 
     @Override
@@ -166,7 +159,7 @@ public class SusChunkFinder extends Module {
                     if (section.hasAny(state -> state.isOf(block))) {
                         int sectionY = chunk.getBottomSectionCoord() + i;
                         if (sectionY * 16 <= maxY.get() && (sectionY * 16 + 15) >= minY.get()) {
-                            scanQueue.offer(new ChunkScanRequest(chunk.getPos(), sectionY));
+                            final ChunkPos cPos = chunk.getPos(); final int sy = sectionY; final ChunkSection sec = section; scanQueue.offer(() -> { scanSection(cPos, sy, sec); return null; });
                             break;
                         }
                     }
@@ -203,20 +196,9 @@ public class SusChunkFinder extends Module {
         if (ticksSinceScan >= scanDelay.get()) {
             int processed = 0;
             while (processed < 5 && !scanQueue.isEmpty()) {
-                ChunkScanRequest req = scanQueue.poll();
-                if (req != null) {
-                    if (mc.world.getChunkManager().isChunkLoaded(req.pos().x, req.pos().z)) {
-                        net.minecraft.world.chunk.WorldChunk chunk = mc.world.getChunkManager().getWorldChunk(req.pos().x, req.pos().z);
-                        if (chunk != null) {
-                            int secIdx = req.sectionY() - chunk.getBottomSectionCoord();
-                            if (secIdx >= 0 && secIdx < chunk.getSectionArray().length) {
-                                ChunkSection section = chunk.getSectionArray()[secIdx];
-                                if (section != null && !section.isEmpty()) {
-                                    scanSection(req.pos(), req.sectionY(), section);
-                                }
-                            }
-                        }
-                    }
+                java.util.function.Supplier<Void> task = scanQueue.poll();
+                if (task != null) {
+                    task.get();
                     processed++;
                 }
             }
@@ -243,15 +225,6 @@ public class SusChunkFinder extends Module {
                 }
                 return remove;
             });
-
-            // Cache render blocks
-            double maxDistSq = Math.pow(scanRadius.get() * 16.0, 2);
-            blocksToRender = foundBlocks.stream()
-                    .filter(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ()) <= maxDistSq)
-                    .filter(p -> chunkBlockCount.getOrDefault(new ChunkPos(p), 0) >= threshold.get())
-                    .sorted(Comparator.comparingDouble(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ())))
-                    .limit(maxBoxes.get())
-                    .collect(Collectors.toList());
         }
     }
 
@@ -259,28 +232,20 @@ public class SusChunkFinder extends Module {
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null || !renderBoxes.get()) return;
 
-        List<BlockPos> currentBlocks = blocksToRender;
-        if (currentBlocks == null) return;
+        double maxDistSq = Math.pow(scanRadius.get() * 16.0, 2);
+        List<BlockPos> sortedBlocks = foundBlocks.stream()
+                .filter(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ()) <= maxDistSq)
+                .filter(p -> chunkBlockCount.getOrDefault(new ChunkPos(p), 0) >= threshold.get())
+                .sorted(Comparator.comparingDouble(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ())))
+                .limit(maxBoxes.get())
+                .collect(Collectors.toList());
 
-        for (BlockPos pos : currentBlocks) {
+        for (BlockPos pos : sortedBlocks) {
             event.renderer.box(pos, fillColor.get(), outlineColor.get(), ShapeMode.Both, 0);
 
             if (tracers.get()) {
                 event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, outlineColor.get());
             }
-
-            if (renderBeam.get()) {
-                ChunkPos cPos = new ChunkPos(pos);
-                double minX = cPos.getStartX() + 7;
-                double maxX = cPos.getStartX() + 9;
-                double minZ = cPos.getStartZ() + 7;
-                double maxZ = cPos.getStartZ() + 9;
-                double minY = pos.getY();
-                double maxY = 320.0;
-                event.renderer.box(minX, minY, minZ, maxX, maxY, maxZ, beamColor.get(), beamColor.get(), ShapeMode.Both, 0);
-            }
         }
     }
-
-    private record ChunkScanRequest(ChunkPos pos, int sectionY) {}
 }

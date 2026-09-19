@@ -66,8 +66,6 @@ public class NetheriteFinder extends Module {
     private final Setting<SettingColor> lineColor = sgRender.add(new ColorSetting.Builder().name("esp-outline-color").defaultValue(new SettingColor(255, 105, 180, 255)).build());
     private final Setting<SettingColor> tracerColor = sgRender.add(new ColorSetting.Builder().name("tracer-color").defaultValue(new SettingColor(255, 105, 180, 255)).build());
 
-    private final Setting<SettingColor> blastSideColor = sgRender.add(new ColorSetting.Builder().name("blast-side-color").defaultValue(new SettingColor(255, 0, 0, 50)).build());
-    private final Setting<SettingColor> blastLineColor = sgRender.add(new ColorSetting.Builder().name("blast-outline-color").defaultValue(new SettingColor(255, 0, 0, 255)).build());
     private final Set<BlockPos> foundBlocks = ConcurrentHashMap.newKeySet();
     private final Set<ChunkSectionPos> suspectedSet = ConcurrentHashMap.newKeySet();
     private final Set<ChunkSectionPos> enteredSections = ConcurrentHashMap.newKeySet();
@@ -81,7 +79,6 @@ public class NetheriteFinder extends Module {
 
     private volatile BlockPos pendingAlertPos = null;
     private int ticksSinceAlert = 0;
-    private volatile java.util.List<BlockPos> blocksToRender = new java.util.ArrayList<>();
 
     public NetheriteFinder() {
         super(DoritosAddon.CATEGORY, "NetheriteFinder", "Doritos-style Palette truster. Never disappears while moving.");
@@ -185,17 +182,12 @@ public class NetheriteFinder extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
-
-        if (mc.player.age % 5 != 0) return; // OPTIMIZATION: Process queues only every 5 ticks
-
         ticksSinceAlert++;
 
         ChunkSectionPos playerSec = ChunkSectionPos.from(mc.player.getBlockPos());
-
         if (suspectedSet.contains(playerSec)) {
             enteredSections.add(playerSec);
         }
-
 
         // Авто-удаление: удаляем ТОЛЬКО если точечные блоки были точно найдены (confirmed),
         // и теперь их там нет (выкопаны вблизи). Во время полета удаляться ничего не будет!
@@ -220,8 +212,6 @@ public class NetheriteFinder extends Module {
         }
     }
 
-
-
     private void processPaletteQueue() {
         int processed = 0;
 
@@ -233,7 +223,7 @@ public class NetheriteFinder extends Module {
             int cz = sectionPos.getSectionZ();
 
             if (!mc.world.getChunkManager().isChunkLoaded(cx, cz)) {
-                retryCounts.remove(sectionPos);
+                suspectedQueue.offer(sectionPos);
                 continue;
             }
 
@@ -331,24 +321,21 @@ public class NetheriteFinder extends Module {
             }
             return isFar;
         });
-
-        // Cache render blocks to fix FPS drops
-        double maxDistSq = Math.pow(renderDistance.get() * 16.0, 2);
-        blocksToRender = foundBlocks.stream()
-                .filter(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ()) <= maxDistSq)
-                .sorted(Comparator.comparingDouble(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ())))
-                .collect(Collectors.toList());
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null || coordsOnly.get()) return;
 
-        java.util.List<BlockPos> currentBlocks = blocksToRender;
-        if (currentBlocks == null) return;
+        double maxDistSq = Math.pow(renderDistance.get() * 16.0, 2);
+
+        List<BlockPos> sortedBlocks = foundBlocks.stream()
+                .filter(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ()) <= maxDistSq)
+                .sorted(Comparator.comparingDouble(p -> p.getSquaredDistance(mc.player.getX(), mc.player.getY(), mc.player.getZ())))
+                .collect(Collectors.toList());
 
         int rendered = 0;
-        for (BlockPos pos : currentBlocks) {
+        for (BlockPos pos : sortedBlocks) {
             if (rendered >= maxBoxes.get()) break;
 
             if (blockEsp.get()) {
@@ -362,7 +349,8 @@ public class NetheriteFinder extends Module {
         }
 
         if (espSections.get()) {
-            Color redLine = blastLineColor.get();
+            Color redLine = new Color(255, 0, 0, 255);
+            Color redSide = new Color(255, 0, 0, 50);
 
             for (ChunkSectionPos sec : suspectedSet) {
                 boolean hasEntered = enteredSections.contains(sec);
@@ -370,9 +358,15 @@ public class NetheriteFinder extends Module {
 
                 event.renderer.box(sec.getMinX(), sec.getMinY(), sec.getMinZ(), sec.getMaxX() + 1, sec.getMaxY() + 1, sec.getMaxZ() + 1, sideColor.get(), currentLineColor, ShapeMode.Lines, 0);
 
-
-
-
+                if (hasEntered) {
+                    double minX = sec.getMinX() + 7;
+                    double maxX = sec.getMinX() + 9;
+                    double minY = sec.getMinY();
+                    double maxY = sec.getMinY() + 0.05;
+                    double minZ = sec.getMinZ() + 7;
+                    double maxZ = sec.getMinZ() + 9;
+                    event.renderer.box(minX, minY, minZ, maxX, maxY, maxZ, redSide, redLine, ShapeMode.Both, 0);
+                }
             }
         }
 
