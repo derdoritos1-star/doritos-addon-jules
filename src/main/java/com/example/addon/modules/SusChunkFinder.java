@@ -207,7 +207,7 @@ public class SusChunkFinder extends Module {
             }
 
             for (Map.Entry<ChunkPos, Integer> entry : minecartCounts.entrySet()) {
-                if (entry.getValue() >= 3) { // 3+ storage carts indicates a stash/farm, bypassing standard mineshafts
+                if (entry.getValue() >= 10) { // Set to 10+ to avoid mineshaft spam completely
                     addScore(entry.getKey(), anomalyThreshold.get());
                 }
             }
@@ -230,7 +230,7 @@ public class SusChunkFinder extends Module {
                     if (type == net.minecraft.block.entity.BlockEntityType.SHULKER_BOX || type == net.minecraft.block.entity.BlockEntityType.TRAPPED_CHEST) {
                         localScore += anomalyThreshold.get(); // 100% Player Stash
                     } else if (type == net.minecraft.block.entity.BlockEntityType.CHEST || type == net.minecraft.block.entity.BlockEntityType.BARREL || type == net.minecraft.block.entity.BlockEntityType.HOPPER) {
-                        localScore += 10; // Nerf normal chests to avoid mineshaft flags
+                        localScore += 0; // Ignore standard chests by default to prevent natural mineshaft spam. Adjust via settings in full versions.
                     }
                 }
             }
