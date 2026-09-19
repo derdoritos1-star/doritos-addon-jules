@@ -76,6 +76,7 @@ public class SusChunkFinder extends Module {
     private final List<ChunkPos> alertHistory = new ArrayList<>();
     private final List<BlockPos> soundHeatmap = new ArrayList<>();
     private ChunkPos predictedVector = null;
+    private final java.util.Queue<net.minecraft.world.chunk.WorldChunk> chunkQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     public SusChunkFinder() {
         super(DoritosAddon.CATEGORY, "SusChunkFinder", "Sub-Zero Target Detector. Exploits anti-xray flaws below Y=0.");
@@ -88,6 +89,7 @@ public class SusChunkFinder extends Module {
         alertHistory.clear();
         soundHeatmap.clear();
         predictedVector = null;
+        chunkQueue.clear();
 
         if (mc.world != null && mc.player != null) {
             ChunkPos playerChunk = mc.player.getChunkPos();
@@ -113,6 +115,7 @@ public class SusChunkFinder extends Module {
         alertHistory.clear();
         soundHeatmap.clear();
         predictedVector = null;
+        chunkQueue.clear();
     }
 
     private void addScore(ChunkPos pos, int score) {
@@ -151,12 +154,19 @@ public class SusChunkFinder extends Module {
     @EventHandler
     private void onChunkData(ChunkDataEvent event) {
         if (mc.world == null) return;
-        processChunk(event.chunk());
+        chunkQueue.offer(event.chunk());
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
+
+        int processed = 0;
+        while (!chunkQueue.isEmpty() && processed < 10) {
+            net.minecraft.world.chunk.WorldChunk chunk = chunkQueue.poll();
+            if (chunk != null) processChunk(chunk);
+            processed++;
+        }
 
         if (mc.player.age % 20 != 0) return; // OPTIMIZATION: Only run 1 time per second
 
@@ -388,7 +398,7 @@ public class SusChunkFinder extends Module {
 
             if (drawBeacon.get()) {
                 // Flat red layer 0.5 blocks thick on the surface
-                event.renderer.box(minX, surfaceY, minZ, maxX, surfaceY + 0.5, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
+                event.renderer.box(minX, surfaceY, minZ, maxX, surfaceY + 0.2, maxZ, fillColor, outlineColor, ShapeMode.Both, 0);
             }
 
             if (drawTracers.get()) {
