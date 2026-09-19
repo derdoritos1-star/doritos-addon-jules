@@ -85,7 +85,7 @@ public class NetheriteFinder extends Module {
     private volatile java.util.List<BlockPos> blocksToRender = new java.util.ArrayList<>();
 
     public NetheriteFinder() {
-        super(DoritosAddon.CATEGORY, "NetheriteFinder", "Doritos-style Palette truster. Never disappears while moving.");
+        super(DoritosAddon.CATEGORY, "NetheriteFinder", "Zync-style Palette truster. Never disappears while moving.");
     }
 
     @Override

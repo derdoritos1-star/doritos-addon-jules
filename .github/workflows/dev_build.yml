@@ -33,4 +33,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create dev-${{ steps.time.outputs.timestamp }} build/libs/*.jar --title "doritos addon $(date +'%d.%m.%y %H:%M')" --prerelease
+          for i in {1..3}; do
+            if gh release create dev-${{ steps.time.outputs.timestamp }} build/libs/*.jar --title "doritos addon $(date +'%d.%m.%y %H:%M')" --prerelease; then
+              echo "Release created successfully"
+              exit 0
+            fi
+            echo "Release creation failed, retrying in 5s..."
+            # Try to clean up in case the release was created but upload failed
+            gh release delete dev-${{ steps.time.outputs.timestamp }} --cleanup-tag -y || true
+            sleep 5
+          done
+          exit 1
