@@ -19,12 +19,13 @@ public class MinecraftClientMixin {
     private void onDoAttackHead(CallbackInfo ci) {
         MinecraftClient mc = MinecraftClient.getInstance();
         DoritosFreecamera tweaks = Modules.get().get(DoritosFreecamera.class);
-        if (tweaks != null && tweaks.isActive() && tweaks.interactFromPlayer.get() && mc.player != null) {
+        if (tweaks != null && tweaks.isActive() && tweaks.interactFromPlayer.get() && mc.player != null && mc.interactionManager != null) {
             cachedCameraEntity = mc.getCameraEntity();
             mc.setCameraEntity(mc.player);
 
             cachedCrosshairTarget = mc.crosshairTarget;
-            mc.crosshairTarget = mc.player.raycast(5.0, 1.0F, false);
+            float reach = 4.5F;
+            mc.crosshairTarget = mc.player.raycast(reach, 1.0F, false);
         }
     }
 
@@ -45,12 +46,13 @@ public class MinecraftClientMixin {
     private void onDoItemUseHead(CallbackInfo ci) {
         MinecraftClient mc = MinecraftClient.getInstance();
         DoritosFreecamera tweaks = Modules.get().get(DoritosFreecamera.class);
-        if (tweaks != null && tweaks.isActive() && tweaks.interactFromPlayer.get() && mc.player != null) {
+        if (tweaks != null && tweaks.isActive() && tweaks.interactFromPlayer.get() && mc.player != null && mc.interactionManager != null) {
             cachedCameraEntity = mc.getCameraEntity();
             mc.setCameraEntity(mc.player);
 
             cachedCrosshairTarget = mc.crosshairTarget;
-            mc.crosshairTarget = mc.player.raycast(5.0, 1.0F, false);
+            float reach = 4.5F;
+            mc.crosshairTarget = mc.player.raycast(reach, 1.0F, false);
         }
     }
 
@@ -71,12 +73,13 @@ public class MinecraftClientMixin {
     private void onHandleBlockBreakingHead(boolean bl, CallbackInfo ci) {
         MinecraftClient mc = MinecraftClient.getInstance();
         DoritosFreecamera tweaks = Modules.get().get(DoritosFreecamera.class);
-        if (tweaks != null && tweaks.isActive() && tweaks.interactFromPlayer.get() && mc.player != null) {
+        if (tweaks != null && tweaks.isActive() && tweaks.interactFromPlayer.get() && mc.player != null && mc.interactionManager != null) {
             cachedCameraEntity = mc.getCameraEntity();
             mc.setCameraEntity(mc.player);
 
             cachedCrosshairTarget = mc.crosshairTarget;
-            mc.crosshairTarget = mc.player.raycast(5.0, 1.0F, false);
+            float reach = 4.5F;
+            mc.crosshairTarget = mc.player.raycast(reach, 1.0F, false);
         }
     }
 
