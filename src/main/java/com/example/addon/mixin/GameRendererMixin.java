@@ -6,6 +6,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.render.Freecam;
 
 @Mixin(GameRenderer.class)
 public class GameRendererMixin {
@@ -13,9 +15,11 @@ public class GameRendererMixin {
     private void onUpdateTargetedEntity(float tickDelta, CallbackInfo ci) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null && client.interactionManager != null) {
-            // Replaced getReachDistance() with 4.5F as getReachDistance() is not mapped in this Yarn version and would cause CI compilation failure.
-            client.crosshairTarget = client.player.raycast(4.5F, tickDelta, false);
-            ci.cancel();
+            Freecam freecam = Modules.get().get(Freecam.class);
+            if (freecam != null && freecam.isActive()) {
+                client.crosshairTarget = client.player.raycast(4.5F, tickDelta, false);
+                ci.cancel();
+            }
         }
     }
 }
