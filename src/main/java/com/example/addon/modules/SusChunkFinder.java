@@ -103,6 +103,15 @@ public class SusChunkFinder extends Module {
             .build()
     );
 
+    private final Setting<Integer> minIndependentEvidence = sgScoring.add(new IntSetting.Builder()
+            .name("min-independent-evidence")
+            .description("Minimum independent evidence categories required to confirm.")
+            .defaultValue(2)
+            .min(1)
+            .sliderMax(5)
+            .build()
+    );
+
     private final Setting<Integer> scoreDecayTicks = sgScoring.add(new IntSetting.Builder()
             .name("score-decay-ticks")
             .description("Ticks before score starts decaying.")
@@ -161,7 +170,13 @@ public class SusChunkFinder extends Module {
         PACKET_ANOMALY,
         LARGE_AREA,
         MULTI_SECTION,
-        NEIGHBOR_CLUSTER
+        NEIGHBOR_CLUSTER,
+        NORMALITY_TUNNEL,
+        NORMALITY_SHAFT
+    }
+
+    public enum EvidenceCategory {
+        STRUCTURAL, BLOCK_ENTITY, LIGHT, ENTITY, SOUND, NETWORK
     }
 
     public static class ChunkState {
@@ -174,6 +189,8 @@ public class SusChunkFinder extends Module {
         public int affectedArea;
 
         // Internal tracking
+        public java.util.Map<Evidence, Integer> evidenceCounts;
+        public EnumSet<EvidenceCategory> independentCategories;
         public Set<BlockPos> suspiciousBlocks;
         public Set<Integer> sectionYSet;
 
@@ -185,6 +202,8 @@ public class SusChunkFinder extends Module {
             this.evidence = EnumSet.noneOf(Evidence.class);
             this.affectedSections = 0;
             this.affectedArea = 0;
+            this.evidenceCounts = new java.util.HashMap<>();
+            this.independentCategories = EnumSet.noneOf(EvidenceCategory.class);
             this.suspiciousBlocks = new HashSet<>();
             this.sectionYSet = new HashSet<>();
         }
@@ -217,7 +236,19 @@ public class SusChunkFinder extends Module {
         clearCache();
     }
 
-    private void addEvidence(ChunkPos cPos, Evidence type, int scoreContribution, BlockPos pos) {
+    private EvidenceCategory getCategory(Evidence ev) {
+        switch(ev) {
+            case BLOCK_PATTERN: case LARGE_AREA: case MULTI_SECTION: case NEIGHBOR_CLUSTER: return EvidenceCategory.STRUCTURAL;
+            case BLOCK_ENTITY: return EvidenceCategory.BLOCK_ENTITY;
+            case LIGHT: return EvidenceCategory.LIGHT;
+            case ENTITY: return EvidenceCategory.ENTITY;
+            case SOUND: return EvidenceCategory.SOUND;
+            case PACKET_ANOMALY: return EvidenceCategory.NETWORK;
+            default: return EvidenceCategory.STRUCTURAL;
+        }
+    }
+
+    private void addEvidence(ChunkPos cPos, Evidence type, int maxContribution, BlockPos pos) {
         if (pos != null && pos.getY() >= 0) return; // Only process underground
 
         long now = System.currentTimeMillis();
@@ -230,12 +261,17 @@ public class SusChunkFinder extends Module {
             state.sectionYSet.add(pos.getY() >> 4);
         }
 
+        int count = state.evidenceCounts.getOrDefault(type, 0);
+        if (count > 5) return; // Cap repeated evidence heavily
+        state.evidenceCounts.put(type, count + 1);
+
+        state.independentCategories.add(getCategory(type));
+
         if (state.evidence.add(type)) {
-            // First time getting this evidence type gives full score
-            state.score += scoreContribution;
+            state.score += maxContribution;
         } else {
-            // Diminishing returns for repeated evidence of the same type
-            state.score += Math.max(1, scoreContribution / 3);
+            int diminishing = Math.max(0, maxContribution - (count * (maxContribution / 3)));
+            state.score += diminishing;
         }
     }
 
@@ -306,20 +342,6 @@ public class SusChunkFinder extends Module {
                     addEvidence(new ChunkPos(pos), Evidence.ENTITY, 6, pos);
                 }
             }
-        } else if (event.packet instanceof LightUpdateS2CPacket packet) {
-            java.util.BitSet initedBlock = packet.getData().getInitedBlock();
-            if (initedBlock != null) {
-                int chunkBottomSectionY = mc.world.getBottomSectionCoord();
-                for (int i = 0; i < initedBlock.length(); i++) {
-                    if (initedBlock.get(i)) {
-                        int sectionY = i + chunkBottomSectionY;
-                        if (sectionY < 0) { // Underground
-                            BlockPos centerPos = new BlockPos(packet.getChunkX() * 16 + 8, sectionY * 16 + 8, packet.getChunkZ() * 16 + 8);
-                            addEvidence(new ChunkPos(centerPos), Evidence.LIGHT, 3, centerPos);
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -330,6 +352,10 @@ public class SusChunkFinder extends Module {
 
         int localArea = 0;
         int localSections = 0;
+
+        int minX = 16, maxX = 0;
+        int minZ = 16, maxZ = 0;
+        int minY = 256, maxY = -256;
 
         for (int i = 0; i < chunk.getSectionArray().length; i++) {
             ChunkSection section = chunk.getSectionArray()[i];
@@ -348,6 +374,9 @@ public class SusChunkFinder extends Module {
                         if (targetBlocks.get().contains(state.getBlock())) {
                             localArea++;
                             hasSusBlock = true;
+                            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+                            minY = Math.min(minY, y + sectionY * 16); maxY = Math.max(maxY, y + sectionY * 16);
                         }
                     }
                 }
@@ -358,13 +387,24 @@ public class SusChunkFinder extends Module {
         }
 
         if (localArea > 0 || localSections > 0) {
+            int bbWidthX = maxX - minX + 1;
+            int bbWidthZ = maxZ - minZ + 1;
+            int bbHeight = maxY - minY + 1;
+
             ChunkState state = chunkCache.computeIfAbsent(cPos.toLong(), k -> new ChunkState(cPos, System.currentTimeMillis()));
             state.affectedArea = Math.max(state.affectedArea, localArea);
             state.affectedSections = Math.max(state.affectedSections, localSections);
 
-            if (state.affectedArea >= minLargeArea.get()) {
+            double density = (double) localArea / (bbWidthX * bbWidthZ * Math.max(1, bbHeight));
+
+            if (bbWidthX <= 2 && bbWidthZ <= 2 && localArea > 5) {
+                state.evidence.add(Evidence.NORMALITY_SHAFT);
+            } else if (Math.min(bbWidthX, bbWidthZ) <= 2 && Math.max(bbWidthX, bbWidthZ) > 6) {
+                state.evidence.add(Evidence.NORMALITY_TUNNEL);
+            } else if (state.affectedArea >= minLargeArea.get() && density > 0.1) {
                 addEvidence(cPos, Evidence.LARGE_AREA, 10, null);
             }
+
             if (state.affectedSections >= minAffectedSections.get()) {
                 addEvidence(cPos, Evidence.MULTI_SECTION, 8, null);
             }
@@ -380,41 +420,34 @@ public class SusChunkFinder extends Module {
 
         chunkCache.long2ObjectEntrySet().removeIf(entry -> {
             ChunkState state = entry.getValue();
-
-            // Score decay
             if (now - state.lastSeen > decayMillis) {
-                state.score = Math.max(0, state.score - 1);
-                state.lastSeen = now - decayMillis + 1000; // decay every second roughly
+                return true;
             }
-
-            return state.score <= 0 && state.evidence.isEmpty();
+            return false;
         });
 
-        // Clustering
+        // Confirmation
         for (ChunkState state : chunkCache.values()) {
-            if (state.score >= candidateThreshold.get()) {
-                int neighborCount = 0;
-                ChunkPos pos = state.pos;
+            int requiredScore = confirmedThreshold.get();
+            if (state.evidence.contains(Evidence.NORMALITY_TUNNEL) || state.evidence.contains(Evidence.NORMALITY_SHAFT)) {
+                requiredScore += 20; // Harder to confirm normal-looking excavations
+            }
 
+            int neighborCount = 0;
+            if (state.score >= candidateThreshold.get()) {
                 for (int x = -1; x <= 1; x++) {
                     for (int z = -1; z <= 1; z++) {
                         if (x == 0 && z == 0) continue;
-                        ChunkState neighbor = chunkCache.get(ChunkPos.toLong(pos.x + x, pos.z + z));
+                        ChunkState neighbor = chunkCache.get(ChunkPos.toLong(state.pos.x + x, state.pos.z + z));
                         if (neighbor != null && neighbor.score >= candidateThreshold.get()) {
                             neighborCount++;
                         }
                     }
                 }
-
-                if (neighborCount >= minClusterSize.get()) {
-                    addEvidence(pos, Evidence.NEIGHBOR_CLUSTER, 5, null);
-                }
             }
-        }
+            int dynamicScore = state.score + (neighborCount >= minClusterSize.get() ? 10 : 0);
 
-        // Confirmation
-        for (ChunkState state : chunkCache.values()) {
-            if (state.score >= confirmedThreshold.get()) {
+            if (dynamicScore >= requiredScore && state.independentCategories.size() >= minIndependentEvidence.get()) {
                 if (confirmedChunks.add(state.pos)) {
                     sendNotification(state);
                 }
@@ -444,7 +477,7 @@ public class SusChunkFinder extends Module {
         }
 
         if (debugMode.get()) {
-            ChatUtils.info("Debug Evidence for %d, %d: %s", state.pos.getStartX(), state.pos.getStartZ(), state.evidence.toString());
+            ChatUtils.info("Debug Evidence for %d, %d: Score %d. Categories: %d. Area: %d. Evidence: %s", state.pos.getStartX(), state.pos.getStartZ(), state.score, state.independentCategories.size(), state.affectedArea, state.evidence.toString());
         }
     }
 
@@ -456,11 +489,14 @@ public class SusChunkFinder extends Module {
             boolean isConfirmed = confirmedChunks.contains(state.pos);
             if (!isConfirmed && !debugMode.get()) continue;
 
-            // Get surface Y for this chunk
             WorldChunk chunk = mc.world.getChunk(state.pos.x, state.pos.z);
             if (chunk == null) continue;
 
-            int surfaceY = chunk.sampleHeightmap(Heightmap.Type.MOTION_BLOCKING, 8, 8);
+            int sy1 = chunk.sampleHeightmap(Heightmap.Type.MOTION_BLOCKING, 0, 0);
+            int sy2 = chunk.sampleHeightmap(Heightmap.Type.MOTION_BLOCKING, 8, 8);
+            int sy3 = chunk.sampleHeightmap(Heightmap.Type.MOTION_BLOCKING, 15, 15);
+            int surfaceY = Math.max(sy1, Math.max(sy2, sy3));
+
             if (surfaceY < mc.world.getBottomY()) surfaceY = mc.world.getBottomY(); // fallback
 
             int startX = state.pos.getStartX();
