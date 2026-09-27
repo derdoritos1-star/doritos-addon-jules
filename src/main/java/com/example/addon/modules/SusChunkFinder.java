@@ -53,6 +53,24 @@ public class SusChunkFinder extends Module {
             .build()
     );
 
+    private final Setting<Integer> minY = sgGeneral.add(new IntSetting.Builder()
+            .name("min-y")
+            .description("Minimum Y level to scan.")
+            .defaultValue(-64)
+            .min(-64)
+            .sliderMax(320)
+            .build()
+    );
+
+    private final Setting<Integer> maxY = sgGeneral.add(new IntSetting.Builder()
+            .name("max-y")
+            .description("Maximum Y level to scan.")
+            .defaultValue(0)
+            .min(-64)
+            .sliderMax(320)
+            .build()
+    );
+
     // Scoring Settings
     private final Setting<Integer> candidateThreshold = sgScoring.add(new IntSetting.Builder()
             .name("candidate-threshold")
@@ -118,34 +136,40 @@ public class SusChunkFinder extends Module {
     );
 
     // Render Settings
-    private final Setting<Boolean> debugMode = sgRender.add(new BoolSetting.Builder()
-            .name("debug-mode")
-            .description("Render candidates and show scores.")
+    private final Setting<Integer> renderDistance = sgRender.add(new IntSetting.Builder()
+            .name("render-distance")
+            .description("Maximum distance (in chunks) to render the platform.")
+            .defaultValue(16)
+            .min(1)
+            .sliderMax(32)
+            .build()
+    );
+
+    private final Setting<Boolean> renderConfirmed = sgRender.add(new BoolSetting.Builder()
+            .name("render-confirmed")
+            .description("Render platforms for confirmed suspicious chunks.")
+            .defaultValue(true)
+            .build()
+    );
+
+    private final Setting<Boolean> renderCandidates = sgRender.add(new BoolSetting.Builder()
+            .name("render-candidates")
+            .description("Render platforms for unconfirmed candidates.")
             .defaultValue(false)
             .build()
     );
 
-    private final Setting<SettingColor> confirmedColor = sgRender.add(new ColorSetting.Builder()
-            .name("confirmed-color")
-            .description("The color of confirmed chunks.")
+    private final Setting<SettingColor> platformColor = sgRender.add(new ColorSetting.Builder()
+            .name("platform-color")
+            .description("The color of the solid flat platform.")
             .defaultValue(new SettingColor(255, 0, 0, 100))
             .build()
     );
 
-    private final Setting<SettingColor> debugColor = sgRender.add(new ColorSetting.Builder()
-            .name("debug-color")
-            .description("The color of candidate chunks in debug mode.")
-            .defaultValue(new SettingColor(255, 255, 0, 100))
-            .visible(debugMode::get)
-            .build()
-    );
-
-    private final Setting<Double> renderThickness = sgRender.add(new DoubleSetting.Builder()
-            .name("render-thickness")
-            .description("Thickness of the surface marker.")
-            .defaultValue(0.2)
-            .min(0.01)
-            .sliderMax(1.0)
+    private final Setting<Boolean> debugMode = sgRender.add(new BoolSetting.Builder()
+            .name("debug-mode")
+            .description("Show extra scoring info in chat and render candidate colors distinctly.")
+            .defaultValue(false)
             .build()
     );
 
@@ -279,7 +303,7 @@ public class SusChunkFinder extends Module {
     }
 
     private void addEvidence(ChunkPos cPos, Evidence type, int maxContribution, BlockPos pos) {
-        if (pos != null && pos.getY() >= 0) return; // Only process underground
+        if (pos != null && (pos.getY() < minY.get() || pos.getY() > maxY.get())) return; // Filter by user Y limits
 
         EvidenceCategory category = getCategory(type);
         long posLong = 0;
@@ -347,7 +371,7 @@ public class SusChunkFinder extends Module {
         if (mc.world == null || mc.player == null) return;
 
         if (event.packet instanceof BlockUpdateS2CPacket packet) {
-            if (packet.getPos().getY() < 0) {
+            if (packet.getPos().getY() >= minY.get() && packet.getPos().getY() <= maxY.get()) {
                 if (isAmethyst(packet.getState())) return;
 
                 if (targetBlocks.get().contains(packet.getState().getBlock())) {
@@ -356,7 +380,7 @@ public class SusChunkFinder extends Module {
             }
         } else if (event.packet instanceof ChunkDeltaUpdateS2CPacket packet) {
             packet.visitUpdates((pos, state) -> {
-                if (pos.getY() < 0) {
+                if (pos.getY() >= minY.get() && pos.getY() <= maxY.get()) {
                     if (isAmethyst(state)) return;
 
                     if (targetBlocks.get().contains(state.getBlock())) {
@@ -365,7 +389,7 @@ public class SusChunkFinder extends Module {
                 }
             });
         } else if (event.packet instanceof BlockEntityUpdateS2CPacket packet) {
-            if (packet.getPos().getY() < 0) {
+            if (packet.getPos().getY() >= minY.get() && packet.getPos().getY() <= maxY.get()) {
                 BlockState state = mc.world.getBlockState(packet.getPos());
                 if (!isAmethyst(state)) {
                     int sc = getBlockEntityScore(state.getBlock());
@@ -376,7 +400,7 @@ public class SusChunkFinder extends Module {
             }
         } else if (event.packet instanceof ChunkDataS2CPacket packet) {
             packet.getChunkData().getBlockEntities(packet.getChunkX(), packet.getChunkZ()).accept((pos, type, nbt) -> {
-                if (pos.getY() < 0) {
+                if (pos.getY() >= minY.get() && pos.getY() <= maxY.get()) {
                     String id = net.minecraft.registry.Registries.BLOCK_ENTITY_TYPE.getId(type).getPath();
                     int sc = 1;
                     if (id.contains("shulker_box") || id.contains("hopper") || id.contains("spawner") || id.contains("ender_chest")) {
@@ -390,7 +414,7 @@ public class SusChunkFinder extends Module {
                 }
             });
         } else if (event.packet instanceof PlaySoundS2CPacket packet) {
-            if (packet.getY() < 0) {
+            if (packet.getY() >= minY.get() && packet.getY() <= maxY.get()) {
                 String soundId = packet.getSound().value().id().getPath();
                 if (soundId.contains("piston") || soundId.contains("dispenser") || soundId.contains("chest") ||
                     soundId.contains("barrel") || soundId.contains("dropper") || soundId.contains("shulker_box") ||
@@ -401,7 +425,7 @@ public class SusChunkFinder extends Module {
                 }
             }
         } else if (event.packet instanceof EntitySpawnS2CPacket packet) {
-            if (packet.getY() < 0) {
+            if (packet.getY() >= minY.get() && packet.getY() <= maxY.get()) {
                 if (packet.getEntityType() == net.minecraft.entity.EntityType.HOPPER_MINECART ||
                     packet.getEntityType() == net.minecraft.entity.EntityType.CHEST_MINECART ||
                     packet.getEntityType() == net.minecraft.entity.EntityType.ARMOR_STAND ||
@@ -428,11 +452,13 @@ public class SusChunkFinder extends Module {
             if (section == null || section.isEmpty()) continue;
 
             int sectionY = chunk.getBottomSectionCoord() + i;
-            if (sectionY >= 0) continue; // Only care about underground
 
             boolean hasSusBlock = false;
             for (int x = 0; x < 16; x++) {
                 for (int y = 0; y < 16; y++) {
+                    int globalY = sectionY * 16 + y;
+                    if (globalY < minY.get() || globalY > maxY.get()) continue;
+
                     for (int z = 0; z < 16; z++) {
                         BlockState state = section.getBlockState(x, y, z);
                         if (isAmethyst(state)) continue;
@@ -682,7 +708,9 @@ public class SusChunkFinder extends Module {
 
         for (ChunkState state : chunkCache.values()) {
             boolean isConfirmed = confirmedChunks.contains(state.pos.toLong());
-            if (!isConfirmed && !debugMode.get()) continue;
+
+            if (isConfirmed && !renderConfirmed.get()) continue;
+            if (!isConfirmed && !renderCandidates.get()) continue;
 
             if (state.cachedSurfaceY == -256) {
                 WorldChunk chunk = mc.world.getChunk(state.pos.x, state.pos.z);
@@ -703,13 +731,17 @@ public class SusChunkFinder extends Module {
             int startZ = state.pos.getStartZ();
 
             // Only render if close enough
-            if (mc.player.squaredDistanceTo(startX + 8, surfaceY, startZ + 8) > 256 * 256) continue;
+            int maxDist = renderDistance.get() * 16;
+            if (mc.player.squaredDistanceTo(startX + 8, surfaceY, startZ + 8) > maxDist * maxDist) continue;
 
-            SettingColor color = isConfirmed ? confirmedColor.get() : debugColor.get();
-            double t = renderThickness.get();
+            SettingColor color = platformColor.get();
+            if (!isConfirmed && debugMode.get()) {
+                color = new SettingColor(255, 255, 0, platformColor.get().a);
+            }
+            double t = 0.1; // Hardcoded requirement
 
+            // No lines/edges, solid flat filled platform. Sides mode acts as the filled volume with thickness.
             event.renderer.box(startX, surfaceY, startZ, startX + 16, surfaceY + t, startZ + 16, color, color, ShapeMode.Sides, 0);
-            event.renderer.box(startX, surfaceY, startZ, startX + 16, surfaceY + t, startZ + 16, color, color, ShapeMode.Lines, 0);
         }
     }
 }
