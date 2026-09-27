@@ -1,7 +1,7 @@
 
 package com.example.addon;
 
-import com.example.addon.modules.SusChunkFinder;
+import com.example.addon.modules.sus.SusChunkFinder;
 import com.example.addon.hud.HudExample;
 import com.example.addon.modules.ModuleExample;
 import com.example.addon.modules.NetheriteFinder;
