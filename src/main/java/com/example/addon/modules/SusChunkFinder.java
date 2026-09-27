@@ -53,13 +53,6 @@ public class SusChunkFinder extends Module {
             .build()
     );
 
-    private final Setting<Boolean> ignoreAmethyst = sgGeneral.add(new BoolSetting.Builder()
-            .name("ignore-amethyst")
-            .description("Completely ignore amethyst-related blocks/entities.")
-            .defaultValue(true)
-            .build()
-    );
-
     // Scoring Settings
     private final Setting<Integer> candidateThreshold = sgScoring.add(new IntSetting.Builder()
             .name("candidate-threshold")
@@ -342,7 +335,6 @@ public class SusChunkFinder extends Module {
     }
 
     private boolean isAmethyst(BlockState state) {
-        if (!ignoreAmethyst.get()) return false;
         Block b = state.getBlock();
         return b == Blocks.AMETHYST_BLOCK || b == Blocks.BUDDING_AMETHYST ||
                b == Blocks.AMETHYST_CLUSTER || b == Blocks.LARGE_AMETHYST_BUD ||
@@ -385,8 +377,16 @@ public class SusChunkFinder extends Module {
         } else if (event.packet instanceof ChunkDataS2CPacket packet) {
             packet.getChunkData().getBlockEntities(packet.getChunkX(), packet.getChunkZ()).accept((pos, type, nbt) -> {
                 if (pos.getY() < 0) {
-                    // We don't have block state here securely, but generally assume medium impact
-                    addEvidence(new ChunkPos(pos), Evidence.BLOCK_ENTITY, 3, pos);
+                    String id = net.minecraft.registry.Registries.BLOCK_ENTITY_TYPE.getId(type).getPath();
+                    int sc = 1;
+                    if (id.contains("shulker_box") || id.contains("hopper") || id.contains("spawner") || id.contains("ender_chest")) {
+                        sc = 6;
+                    } else if (id.contains("chest") || id.contains("barrel") || id.contains("furnace") || id.contains("smoker") || id.contains("blast_furnace") || id.contains("trapped_chest")) {
+                        sc = 4;
+                    }
+                    if (sc > 1) {
+                        addEvidence(new ChunkPos(pos), Evidence.BLOCK_ENTITY, sc, pos);
+                    }
                 }
             });
         } else if (event.packet instanceof PlaySoundS2CPacket packet) {
@@ -493,8 +493,9 @@ public class SusChunkFinder extends Module {
             int minY = startPos.getY(), maxY = startPos.getY();
             int traversed = 0;
 
-            while (!queue.isEmpty() && traversed < 2000) { // Bound to prevent chain reaction lag
-                long currLong = queue.removeLong(0);
+            int head = 0;
+            while (head < queue.size() && traversed < 2000) { // Bound to prevent chain reaction lag
+                long currLong = queue.getLong(head++);
                 BlockPos curr = BlockPos.fromLong(currLong);
                 traversed++;
 
@@ -504,6 +505,9 @@ public class SusChunkFinder extends Module {
                         for (int z = -1; z <= 1; z++) {
                             if (x == 0 && y == 0 && z == 0) continue;
                             long neighborLong = BlockPos.asLong(curr.getX() + x, curr.getY() + y, curr.getZ() + z);
+
+                            // To prevent extreme cross-chunk leaps, constrain search distance to roughly within 3 chunks globally from root
+                            if (Math.abs(curr.getX() + x - startPos.getX()) > 48 || Math.abs(curr.getZ() + z - startPos.getZ()) > 48) continue;
 
                             if (unvisited.contains(neighborLong)) {
                                 unvisited.remove(neighborLong);
@@ -563,9 +567,13 @@ public class SusChunkFinder extends Module {
         long now = System.currentTimeMillis();
         long decayMillis = scoreDecayTicks.get() * 50L;
 
-        // Bounds check on processedPositions TTL (simplified clear to keep bounded)
-        if (mc.player.age % 1200 == 0) {
-            processedPositions.clear();
+        // Bounds check on processedPositions TTL (only keep active recent ones)
+        if (mc.player.age % 40 == 0) {
+            long playerChunkPos = ChunkPos.toLong(mc.player.getChunkPos().x, mc.player.getChunkPos().z);
+            processedPositions.long2ObjectEntrySet().removeIf(entry -> {
+                BlockPos bPos = BlockPos.fromLong(entry.getLongKey());
+                return Math.abs((bPos.getX() >> 4) - mc.player.getChunkPos().x) > 48 || Math.abs((bPos.getZ() >> 4) - mc.player.getChunkPos().z) > 48;
+            });
         }
 
         chunkCache.long2ObjectEntrySet().removeIf(entry -> {
@@ -622,10 +630,9 @@ public class SusChunkFinder extends Module {
             boolean hasIndependent = state.independentCategories.size() >= minIndependentEvidence.get();
             boolean hasArea = state.affectedArea >= minLargeArea.get() || (state.largestComponent != null && state.largestComponent.size >= minLargeArea.get());
 
-            boolean hasVeto = state.evidence.contains(Evidence.NORMALITY_TUNNEL) || state.evidence.contains(Evidence.NORMALITY_SHAFT) || state.evidence.contains(Evidence.NORMALITY_SMALL_EXCAVATION);
-            boolean overrideVeto = state.independentCategories.size() >= 3 && dynamicScore >= requiredScore + 10;
+            boolean hasHardVeto = state.evidence.contains(Evidence.NORMALITY_TUNNEL) || state.evidence.contains(Evidence.NORMALITY_SHAFT);
 
-            if (hasScore && hasIndependent && hasArea && (!hasVeto || overrideVeto)) {
+            if (hasScore && hasIndependent && hasArea && !hasHardVeto) {
                 if (confirmedChunks.add(state.pos.toLong())) {
                     sendNotification(state);
                 }
