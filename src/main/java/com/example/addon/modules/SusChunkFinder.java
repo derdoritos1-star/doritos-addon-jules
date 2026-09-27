@@ -33,6 +33,9 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.HashSet;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 public class SusChunkFinder extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -172,7 +175,8 @@ public class SusChunkFinder extends Module {
         MULTI_SECTION,
         NEIGHBOR_CLUSTER,
         NORMALITY_TUNNEL,
-        NORMALITY_SHAFT
+        NORMALITY_SHAFT,
+        NORMALITY_SMALL_EXCAVATION
     }
 
     public enum EvidenceCategory {
@@ -187,6 +191,7 @@ public class SusChunkFinder extends Module {
         public double density;
         public boolean isTunnel;
         public boolean isShaft;
+        public boolean isSmallExcavation;
 
         public ComponentStats(int size, int minX, int maxX, int minZ, int maxZ, int minY, int maxY) {
             this.size = size;
@@ -196,6 +201,7 @@ public class SusChunkFinder extends Module {
             this.density = (double) size / (bbWidthX * bbWidthZ * Math.max(1, bbHeight));
             this.isShaft = bbWidthX <= 2 && bbWidthZ <= 2 && size > 5;
             this.isTunnel = Math.min(bbWidthX, bbWidthZ) <= 2 && Math.max(bbWidthX, bbWidthZ) > 6;
+            this.isSmallExcavation = size <= 5 && bbWidthX <= 3 && bbWidthZ <= 3;
         }
     }
 
@@ -212,8 +218,8 @@ public class SusChunkFinder extends Module {
         // Internal tracking
         public java.util.Map<Evidence, Integer> evidenceCounts;
         public EnumSet<EvidenceCategory> independentCategories;
-        public Set<BlockPos> suspiciousBlocks;
-        public Set<Integer> sectionYSet;
+        public LongOpenHashSet suspiciousBlocks;
+        public it.unimi.dsi.fastutil.ints.IntOpenHashSet sectionYSet;
         public ComponentStats largestComponent;
         public boolean isDirty;
         public int cachedSurfaceY = -256;
@@ -229,18 +235,18 @@ public class SusChunkFinder extends Module {
             this.affectedArea = 0;
             this.evidenceCounts = new java.util.HashMap<>();
             this.independentCategories = EnumSet.noneOf(EvidenceCategory.class);
-            this.suspiciousBlocks = new HashSet<>();
-            this.sectionYSet = new HashSet<>();
+            this.suspiciousBlocks = new LongOpenHashSet();
+            this.sectionYSet = new it.unimi.dsi.fastutil.ints.IntOpenHashSet();
             this.largestComponent = null;
             this.isDirty = false;
         }
     }
 
     // Tracks evidence already recorded to prevent duplicate packets from inflating score
-    private final java.util.Map<BlockPos, EnumSet<EvidenceCategory>> processedPositions = new java.util.HashMap<>();
+    private final Long2ObjectMap<EnumSet<EvidenceCategory>> processedPositions = new Long2ObjectOpenHashMap<>();
 
     private final Long2ObjectMap<ChunkState> chunkCache = new Long2ObjectOpenHashMap<>();
-    private final Set<ChunkPos> confirmedChunks = new HashSet<>();
+    private final LongOpenHashSet confirmedChunks = new LongOpenHashSet();
 
     public SusChunkFinder() {
         super(DoritosAddon.CATEGORY, "sus-chunk-finder", "Finds suspicious underground chunks.");
@@ -283,8 +289,14 @@ public class SusChunkFinder extends Module {
         if (pos != null && pos.getY() >= 0) return; // Only process underground
 
         EvidenceCategory category = getCategory(type);
+        long posLong = 0;
         if (pos != null) {
-            EnumSet<EvidenceCategory> recorded = processedPositions.computeIfAbsent(pos, k -> EnumSet.noneOf(EvidenceCategory.class));
+            posLong = pos.asLong();
+            EnumSet<EvidenceCategory> recorded = processedPositions.get(posLong);
+            if (recorded == null) {
+                recorded = EnumSet.noneOf(EvidenceCategory.class);
+                processedPositions.put(posLong, recorded);
+            }
             if (!recorded.add(category)) {
                 return; // Prevent duplicate evidence tracking for same block
             }
@@ -305,7 +317,7 @@ public class SusChunkFinder extends Module {
         }
 
         if (pos != null && type == Evidence.BLOCK_PATTERN) {
-            state.suspiciousBlocks.add(pos);
+            state.suspiciousBlocks.add(posLong);
             state.sectionYSet.add(pos.getY() >> 4);
         }
 
@@ -452,48 +464,74 @@ public class SusChunkFinder extends Module {
     private void analyzeComponents(ChunkState state) {
         if (state.suspiciousBlocks.isEmpty()) return;
 
-        Set<BlockPos> unvisited = new HashSet<>(state.suspiciousBlocks);
+        // Collect all blocks from this chunk and immediate neighbors for cross-chunk analysis
+        LongOpenHashSet allBlocks = new LongOpenHashSet();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                ChunkState neighbor = chunkCache.get(ChunkPos.toLong(state.pos.x + dx, state.pos.z + dz));
+                if (neighbor != null) {
+                    allBlocks.addAll(neighbor.suspiciousBlocks);
+                }
+            }
+        }
+
+        LongOpenHashSet unvisited = new LongOpenHashSet(allBlocks);
         ComponentStats bestComponent = null;
 
         while (!unvisited.isEmpty()) {
-            BlockPos start = unvisited.iterator().next();
-            Set<BlockPos> component = new HashSet<>();
-            java.util.Queue<BlockPos> queue = new java.util.LinkedList<>();
+            long start = unvisited.iterator().nextLong();
+            LongOpenHashSet component = new LongOpenHashSet();
+            it.unimi.dsi.fastutil.longs.LongArrayList queue = new it.unimi.dsi.fastutil.longs.LongArrayList();
 
             queue.add(start);
             component.add(start);
             unvisited.remove(start);
 
-            int minX = start.getX(), maxX = start.getX();
-            int minZ = start.getZ(), maxZ = start.getZ();
-            int minY = start.getY(), maxY = start.getY();
+            BlockPos startPos = BlockPos.fromLong(start);
+            int minX = startPos.getX(), maxX = startPos.getX();
+            int minZ = startPos.getZ(), maxZ = startPos.getZ();
+            int minY = startPos.getY(), maxY = startPos.getY();
+            int traversed = 0;
 
-            while (!queue.isEmpty()) {
-                BlockPos curr = queue.poll();
+            while (!queue.isEmpty() && traversed < 2000) { // Bound to prevent chain reaction lag
+                long currLong = queue.removeLong(0);
+                BlockPos curr = BlockPos.fromLong(currLong);
+                traversed++;
 
                 // Search 3x3x3 neighborhood
                 for (int x = -1; x <= 1; x++) {
                     for (int y = -1; y <= 1; y++) {
                         for (int z = -1; z <= 1; z++) {
                             if (x == 0 && y == 0 && z == 0) continue;
-                            BlockPos neighbor = curr.add(x, y, z);
+                            long neighborLong = BlockPos.asLong(curr.getX() + x, curr.getY() + y, curr.getZ() + z);
 
-                            if (unvisited.contains(neighbor)) {
-                                unvisited.remove(neighbor);
-                                component.add(neighbor);
-                                queue.add(neighbor);
+                            if (unvisited.contains(neighborLong)) {
+                                unvisited.remove(neighborLong);
+                                component.add(neighborLong);
+                                queue.add(neighborLong);
 
-                                minX = Math.min(minX, neighbor.getX()); maxX = Math.max(maxX, neighbor.getX());
-                                minZ = Math.min(minZ, neighbor.getZ()); maxZ = Math.max(maxZ, neighbor.getZ());
-                                minY = Math.min(minY, neighbor.getY()); maxY = Math.max(maxY, neighbor.getY());
+                                minX = Math.min(minX, curr.getX() + x); maxX = Math.max(maxX, curr.getX() + x);
+                                minZ = Math.min(minZ, curr.getZ() + z); maxZ = Math.max(maxZ, curr.getZ() + z);
+                                minY = Math.min(minY, curr.getY() + y); maxY = Math.max(maxY, curr.getY() + y);
                             }
                         }
                     }
                 }
             }
 
-            if (bestComponent == null || component.size() > bestComponent.size) {
-                bestComponent = new ComponentStats(component.size(), minX, maxX, minZ, maxZ, minY, maxY);
+            // Only care about components rooted/present inside our actual chunk to not duplicate processing
+            boolean belongsToThisChunk = false;
+            for (long cpos : component) {
+                if (state.suspiciousBlocks.contains(cpos)) {
+                    belongsToThisChunk = true;
+                    break;
+                }
+            }
+
+            if (belongsToThisChunk) {
+                if (bestComponent == null || component.size() > bestComponent.size) {
+                    bestComponent = new ComponentStats(component.size(), minX, maxX, minZ, maxZ, minY, maxY);
+                }
             }
         }
 
@@ -506,11 +544,14 @@ public class SusChunkFinder extends Module {
                 state.evidence.add(Evidence.NORMALITY_SHAFT);
             } else if (bestComponent.isTunnel) {
                 state.evidence.add(Evidence.NORMALITY_TUNNEL);
+            } else if (bestComponent.isSmallExcavation) {
+                state.evidence.add(Evidence.NORMALITY_SMALL_EXCAVATION);
             } else if (bestComponent.size >= minLargeArea.get() && bestComponent.density > 0.1) {
                 addEvidence(state.pos, Evidence.LARGE_AREA, 10, null);
                 // clear normality flags if the component evolved into a real base
                 state.evidence.remove(Evidence.NORMALITY_SHAFT);
                 state.evidence.remove(Evidence.NORMALITY_TUNNEL);
+                state.evidence.remove(Evidence.NORMALITY_SMALL_EXCAVATION);
             }
         }
     }
@@ -522,9 +563,24 @@ public class SusChunkFinder extends Module {
         long now = System.currentTimeMillis();
         long decayMillis = scoreDecayTicks.get() * 50L;
 
+        // Bounds check on processedPositions TTL (simplified clear to keep bounded)
+        if (mc.player.age % 1200 == 0) {
+            processedPositions.clear();
+        }
+
         chunkCache.long2ObjectEntrySet().removeIf(entry -> {
             ChunkState state = entry.getValue();
+
+            // Gradual decay of points when stale
+            if (now - state.lastSeen > decayMillis / 2) {
+                state.score = Math.max(0, state.score - 1);
+            }
+
+            // Expiration when extremely stale or drained of significance
             if (now - state.lastSeen > decayMillis) {
+                return true;
+            }
+            if (state.score <= 0 && state.independentCategories.isEmpty() && now - state.firstSeen > 5000) {
                 return true;
             }
             return false;
@@ -566,12 +622,15 @@ public class SusChunkFinder extends Module {
             boolean hasIndependent = state.independentCategories.size() >= minIndependentEvidence.get();
             boolean hasArea = state.affectedArea >= minLargeArea.get() || (state.largestComponent != null && state.largestComponent.size >= minLargeArea.get());
 
-            if (hasScore && hasIndependent && hasArea) {
-                if (confirmedChunks.add(state.pos)) {
+            boolean hasVeto = state.evidence.contains(Evidence.NORMALITY_TUNNEL) || state.evidence.contains(Evidence.NORMALITY_SHAFT) || state.evidence.contains(Evidence.NORMALITY_SMALL_EXCAVATION);
+            boolean overrideVeto = state.independentCategories.size() >= 3 && dynamicScore >= requiredScore + 10;
+
+            if (hasScore && hasIndependent && hasArea && (!hasVeto || overrideVeto)) {
+                if (confirmedChunks.add(state.pos.toLong())) {
                     sendNotification(state);
                 }
             } else {
-                confirmedChunks.remove(state.pos);
+                confirmedChunks.remove(state.pos.toLong());
             }
         }
     }
@@ -598,11 +657,15 @@ public class SusChunkFinder extends Module {
         if (debugMode.get()) {
             String densityStr = state.largestComponent != null ? String.format("%.2f", state.largestComponent.density) : "N/A";
             String bbStr = state.largestComponent != null ? String.format("%dx%dx%d", state.largestComponent.bbWidthX, state.largestComponent.bbHeight, state.largestComponent.bbWidthZ) : "N/A";
+            String vetoStr = "";
+            if (state.evidence.contains(Evidence.NORMALITY_TUNNEL)) vetoStr += "[TUNNEL] ";
+            if (state.evidence.contains(Evidence.NORMALITY_SHAFT)) vetoStr += "[SHAFT] ";
+            if (state.evidence.contains(Evidence.NORMALITY_SMALL_EXCAVATION)) vetoStr += "[SMALL] ";
 
-            ChatUtils.info("Debug %d, %d | Score: %d | Cats: %d | Area: %d | BB: %s | Dens: %s | Flags: %s",
+            ChatUtils.info("Debug [%d, %d] | Score: %d | Indep.Cats: %d | Area: %d | BB: %s | Dens: %s | Vetos: %s | Raw: %s",
                 state.pos.getStartX(), state.pos.getStartZ(),
                 state.score, state.independentCategories.size(),
-                state.affectedArea, bbStr, densityStr, state.evidence.toString());
+                state.affectedArea, bbStr, densityStr, vetoStr.isEmpty() ? "None" : vetoStr, state.evidence.toString());
         }
     }
 
@@ -611,7 +674,7 @@ public class SusChunkFinder extends Module {
         if (mc.world == null || mc.player == null) return;
 
         for (ChunkState state : chunkCache.values()) {
-            boolean isConfirmed = confirmedChunks.contains(state.pos);
+            boolean isConfirmed = confirmedChunks.contains(state.pos.toLong());
             if (!isConfirmed && !debugMode.get()) continue;
 
             if (state.cachedSurfaceY == -256) {

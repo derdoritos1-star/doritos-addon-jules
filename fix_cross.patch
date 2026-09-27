@@ -1,0 +1,66 @@
+--- src/main/java/com/example/addon/modules/SusChunkFinder.java
++++ src/main/java/com/example/addon/modules/SusChunkFinder.java
+@@ -498,7 +498,17 @@
+     private void analyzeComponents(ChunkState state) {
+         if (state.suspiciousBlocks.isEmpty()) return;
+
+-        LongOpenHashSet unvisited = new LongOpenHashSet(state.suspiciousBlocks);
++        // Collect all blocks from this chunk and immediate neighbors for cross-chunk analysis
++        LongOpenHashSet allBlocks = new LongOpenHashSet();
++        for (int dx = -1; dx <= 1; dx++) {
++            for (int dz = -1; dz <= 1; dz++) {
++                ChunkState neighbor = chunkCache.get(ChunkPos.toLong(state.pos.x + dx, state.pos.z + dz));
++                if (neighbor != null) {
++                    allBlocks.addAll(neighbor.suspiciousBlocks);
++                }
++            }
++        }
++
++        LongOpenHashSet unvisited = new LongOpenHashSet(allBlocks);
+         ComponentStats bestComponent = null;
+
+         while (!unvisited.isEmpty()) {
+@@ -512,11 +522,13 @@
+             int minX = startPos.getX(), maxX = startPos.getX();
+             int minZ = startPos.getZ(), maxZ = startPos.getZ();
+             int minY = startPos.getY(), maxY = startPos.getY();
++            int traversed = 0;
+
+-            while (!queue.isEmpty()) {
++            while (!queue.isEmpty() && traversed < 2000) { // Bound to prevent chain reaction lag
+                 long currLong = queue.removeLong(0);
+                 BlockPos curr = BlockPos.fromLong(currLong);
++                traversed++;
+
+                 // Search 3x3x3 neighborhood
+                 for (int x = -1; x <= 1; x++) {
+@@ -536,8 +548,16 @@
+                 }
+             }
+
+-            if (bestComponent == null || component.size() > bestComponent.size) {
+-                bestComponent = new ComponentStats(component.size(), minX, maxX, minZ, maxZ, minY, maxY);
++            // Only care about components rooted/present inside our actual chunk to not duplicate processing
++            boolean belongsToThisChunk = false;
++            for (long cpos : component) {
++                if (state.suspiciousBlocks.contains(cpos)) {
++                    belongsToThisChunk = true;
++                    break;
++                }
++            }
++
++            if (belongsToThisChunk) {
++                if (bestComponent == null || component.size() > bestComponent.size) {
++                    bestComponent = new ComponentStats(component.size(), minX, maxX, minZ, maxZ, minY, maxY);
++                }
+             }
+         }
+
+@@ -562,6 +582,7 @@
+                 // clear normality flags if the component evolved into a real base
+                 state.evidence.remove(Evidence.NORMALITY_SHAFT);
+                 state.evidence.remove(Evidence.NORMALITY_TUNNEL);
++                state.evidence.remove(Evidence.NORMALITY_SMALL_EXCAVATION);
+             }
+         }
+     }
